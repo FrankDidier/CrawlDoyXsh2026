@@ -54,19 +54,19 @@ class ParseResult:
     def get_display_info(self) -> List[tuple]:
         """Get displayable key-value pairs"""
         info = [
-            ("平台 (Platform)", self.platform.value),
-            ("类型 (Type)", self.content_type.value),
-            ("链接 (URL)", self.url),
+            ("平台", self.platform.value),
+            ("类型", self.content_type.value),
+            ("链接", self.url),
         ]
         
         if self.account_id:
-            info.append(("账号ID (Account ID)", self.account_id))
+            info.append(("账号ID", self.account_id))
         if self.account_name:
-            info.append(("账号名称 (Account Name)", self.account_name))
+            info.append(("账号名称", self.account_name))
         if self.store_name:
-            info.append(("店铺名称 (Store Name)", self.store_name))
+            info.append(("店铺名称", self.store_name))
         if self.product_name:
-            info.append(("商品名称 (Product Name)", self.product_name))
+            info.append(("商品名称", self.product_name))
             
         return info
 

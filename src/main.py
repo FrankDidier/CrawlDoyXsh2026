@@ -37,7 +37,7 @@ def main():
     
     # Create application
     app = QApplication(sys.argv)
-    app.setApplicationName("ShareLink Extractor")
+    app.setApplicationName("分享链接提取工具")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("ShareLink")
     

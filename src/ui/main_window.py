@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("ShareLink Extractor - 分享链接提取工具")
+        self.setWindowTitle("分享链接提取工具")
         self.setMinimumSize(900, 700)
         self.resize(1000, 800)
         
@@ -49,11 +49,11 @@ class MainWindow(QMainWindow):
         # Header
         header_layout = QVBoxLayout()
         
-        title_label = QLabel("🔗 ShareLink Extractor")
+        title_label = QLabel("🔗 分享链接提取工具")
         title_label.setObjectName("titleLabel")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        subtitle_label = QLabel("从分享文本中提取链接和账号信息 | Extract links and account info from shared text")
+        subtitle_label = QLabel("从分享文本中提取链接和账号信息")
         subtitle_label.setObjectName("subtitleLabel")
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -65,23 +65,22 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Vertical)
         
         # === Input Section ===
-        input_group = QGroupBox("📥 输入 Input")
+        input_group = QGroupBox("📥 输入")
         input_layout = QVBoxLayout(input_group)
         
-        input_hint = QLabel("粘贴从抖音、快手、淘宝、京东等平台分享的文本 (Paste shared text from platforms)")
+        input_hint = QLabel("粘贴从抖音、快手、淘宝、京东等平台分享的文本")
         input_hint.setStyleSheet("color: #888; font-size: 12px; padding: 5px 0;")
         input_layout.addWidget(input_hint)
         
         self.input_text = QTextEdit()
         self.input_text.setObjectName("inputArea")
         self.input_text.setPlaceholderText(
-            "在此粘贴分享文本...\n"
-            "Paste shared text here...\n\n"
-            "支持的平台 (Supported platforms):\n"
-            "• 抖音 (Douyin) - 直播/短视频\n"
-            "• 快手 (Kuaishou) - 直播/短视频\n"
-            "• 淘宝 (Taobao) - 商品/店铺\n"
-            "• 京东 (JD.com) - 商品/店铺"
+            "在此粘贴分享文本...\n\n"
+            "支持的平台:\n"
+            "• 抖音 - 直播/短视频\n"
+            "• 快手 - 直播/短视频\n"
+            "• 淘宝 - 商品/店铺\n"
+            "• 京东 - 商品/店铺"
         )
         input_layout.addWidget(self.input_text)
         
@@ -89,14 +88,14 @@ class MainWindow(QMainWindow):
         input_btn_layout = QHBoxLayout()
         input_btn_layout.setSpacing(10)
         
-        self.paste_btn = QPushButton("📋 粘贴 Paste")
+        self.paste_btn = QPushButton("📋 粘贴")
         self.paste_btn.clicked.connect(self.paste_from_clipboard)
         
-        self.parse_btn = QPushButton("🔍 提取 Extract")
+        self.parse_btn = QPushButton("🔍 提取")
         self.parse_btn.setObjectName("primaryButton")
         self.parse_btn.clicked.connect(self.parse_input)
         
-        self.clear_input_btn = QPushButton("🗑️ 清空 Clear")
+        self.clear_input_btn = QPushButton("🗑️ 清空")
         self.clear_input_btn.setObjectName("dangerButton")
         self.clear_input_btn.clicked.connect(self.clear_input)
         
@@ -109,20 +108,20 @@ class MainWindow(QMainWindow):
         splitter.addWidget(input_group)
         
         # === Results Section ===
-        results_group = QGroupBox("📊 结果 Results")
+        results_group = QGroupBox("📊 结果")
         results_layout = QVBoxLayout(results_group)
         
         # Results table
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(7)
         self.results_table.setHorizontalHeaderLabels([
-            "平台\nPlatform", 
-            "类型\nType", 
-            "链接\nURL", 
-            "账号ID\nAccount ID",
-            "账号名称\nAccount Name",
-            "店铺名称\nStore Name",
-            "商品名称\nProduct Name"
+            "平台", 
+            "类型", 
+            "链接", 
+            "账号ID",
+            "账号名称",
+            "店铺名称",
+            "商品名称"
         ])
         
         # Table settings
@@ -148,20 +147,20 @@ class MainWindow(QMainWindow):
         results_btn_layout = QHBoxLayout()
         results_btn_layout.setSpacing(10)
         
-        self.copy_url_btn = QPushButton("📎 复制链接 Copy URL")
+        self.copy_url_btn = QPushButton("📎 复制链接")
         self.copy_url_btn.clicked.connect(self.copy_selected_url)
         
-        self.copy_all_btn = QPushButton("📋 复制全部 Copy All")
+        self.copy_all_btn = QPushButton("📋 复制全部")
         self.copy_all_btn.clicked.connect(self.copy_all_results)
         
-        self.export_excel_btn = QPushButton("📊 导出Excel Export")
+        self.export_excel_btn = QPushButton("📊 导出Excel")
         self.export_excel_btn.setObjectName("successButton")
         self.export_excel_btn.clicked.connect(self.export_to_excel)
         
         self.export_csv_btn = QPushButton("📄 导出CSV")
         self.export_csv_btn.clicked.connect(self.export_to_csv)
         
-        self.clear_results_btn = QPushButton("🗑️ 清空结果 Clear")
+        self.clear_results_btn = QPushButton("🗑️ 清空结果")
         self.clear_results_btn.setObjectName("dangerButton")
         self.clear_results_btn.clicked.connect(self.clear_results)
         
@@ -183,7 +182,7 @@ class MainWindow(QMainWindow):
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("准备就绪 | Ready")
+        self.status_bar.showMessage("准备就绪")
         
     def apply_styles(self):
         """Apply the stylesheet"""
@@ -195,9 +194,9 @@ class MainWindow(QMainWindow):
         text = clipboard.text()
         if text:
             self.input_text.setPlainText(text)
-            self.status_bar.showMessage("已粘贴剪贴板内容 | Pasted from clipboard", 3000)
+            self.status_bar.showMessage("已粘贴剪贴板内容", 3000)
         else:
-            self.status_bar.showMessage("剪贴板为空 | Clipboard is empty", 3000)
+            self.status_bar.showMessage("剪贴板为空", 3000)
     
     def parse_input(self):
         """Parse the input text and display results"""
@@ -206,8 +205,8 @@ class MainWindow(QMainWindow):
         if not text:
             QMessageBox.warning(
                 self, 
-                "提示 | Notice",
-                "请先输入或粘贴分享文本\nPlease enter or paste shared text first"
+                "提示",
+                "请先输入或粘贴分享文本"
             )
             return
         
@@ -231,11 +230,9 @@ class MainWindow(QMainWindow):
         if not new_results:
             QMessageBox.information(
                 self,
-                "未找到 | Not Found",
-                "未能从输入文本中提取有效信息\n"
-                "Could not extract valid information from input text\n\n"
-                "请确保文本包含有效的分享链接\n"
-                "Please make sure the text contains valid share links"
+                "未找到",
+                "未能从输入文本中提取有效信息\n\n"
+                "请确保文本包含有效的分享链接"
             )
             return
         
@@ -244,7 +241,7 @@ class MainWindow(QMainWindow):
         self.update_results_table()
         
         self.status_bar.showMessage(
-            f"成功提取 {len(new_results)} 条记录 | Successfully extracted {len(new_results)} record(s)", 
+            f"成功提取 {len(new_results)} 条记录", 
             5000
         )
     
@@ -270,8 +267,8 @@ class MainWindow(QMainWindow):
         if current_row < 0:
             QMessageBox.information(
                 self,
-                "提示 | Notice",
-                "请先选择一行记录\nPlease select a row first"
+                "提示",
+                "请先选择一行记录"
             )
             return
         
@@ -279,15 +276,15 @@ class MainWindow(QMainWindow):
         if url_item:
             clipboard = QApplication.clipboard()
             clipboard.setText(url_item.text())
-            self.status_bar.showMessage("已复制链接 | URL copied to clipboard", 3000)
+            self.status_bar.showMessage("已复制链接", 3000)
     
     def copy_all_results(self):
         """Copy all results to clipboard"""
         if not self.results:
             QMessageBox.information(
                 self,
-                "提示 | Notice",
-                "没有可复制的结果\nNo results to copy"
+                "提示",
+                "没有可复制的结果"
             )
             return
         
@@ -300,7 +297,7 @@ class MainWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setText("\n".join(text_lines))
         self.status_bar.showMessage(
-            f"已复制 {len(self.results)} 条记录 | Copied {len(self.results)} record(s)", 
+            f"已复制 {len(self.results)} 条记录", 
             3000
         )
     
@@ -309,15 +306,15 @@ class MainWindow(QMainWindow):
         if not self.results:
             QMessageBox.information(
                 self,
-                "提示 | Notice",
-                "没有可导出的结果\nNo results to export"
+                "提示",
+                "没有可导出的结果"
             )
             return
         
         default_name = Exporter.generate_filename("sharelink_export", "xlsx")
         filepath, _ = QFileDialog.getSaveFileName(
             self,
-            "导出Excel | Export Excel",
+            "导出Excel",
             default_name,
             "Excel Files (*.xlsx)"
         )
@@ -326,14 +323,14 @@ class MainWindow(QMainWindow):
             if Exporter.to_excel(self.results, filepath):
                 QMessageBox.information(
                     self,
-                    "成功 | Success",
-                    f"已导出到 | Exported to:\n{filepath}"
+                    "成功",
+                    f"已导出到:\n{filepath}"
                 )
             else:
                 QMessageBox.critical(
                     self,
-                    "错误 | Error",
-                    "导出失败，请检查文件路径\nExport failed, please check the file path"
+                    "错误",
+                    "导出失败，请检查文件路径"
                 )
     
     def export_to_csv(self):
@@ -341,15 +338,15 @@ class MainWindow(QMainWindow):
         if not self.results:
             QMessageBox.information(
                 self,
-                "提示 | Notice",
-                "没有可导出的结果\nNo results to export"
+                "提示",
+                "没有可导出的结果"
             )
             return
         
         default_name = Exporter.generate_filename("sharelink_export", "csv")
         filepath, _ = QFileDialog.getSaveFileName(
             self,
-            "导出CSV | Export CSV",
+            "导出CSV",
             default_name,
             "CSV Files (*.csv)"
         )
@@ -358,35 +355,34 @@ class MainWindow(QMainWindow):
             if Exporter.to_csv(self.results, filepath):
                 QMessageBox.information(
                     self,
-                    "成功 | Success",
-                    f"已导出到 | Exported to:\n{filepath}"
+                    "成功",
+                    f"已导出到:\n{filepath}"
                 )
             else:
                 QMessageBox.critical(
                     self,
-                    "错误 | Error",
-                    "导出失败，请检查文件路径\nExport failed, please check the file path"
+                    "错误",
+                    "导出失败，请检查文件路径"
                 )
     
     def clear_input(self):
         """Clear input area"""
         self.input_text.clear()
-        self.status_bar.showMessage("已清空输入 | Input cleared", 2000)
+        self.status_bar.showMessage("已清空输入", 2000)
     
     def clear_results(self):
         """Clear all results"""
         self.results.clear()
         self.results_table.setRowCount(0)
-        self.status_bar.showMessage("已清空结果 | Results cleared", 2000)
+        self.status_bar.showMessage("已清空结果", 2000)
     
     def closeEvent(self, event):
         """Handle window close event"""
         if self.results:
             reply = QMessageBox.question(
                 self,
-                "确认退出 | Confirm Exit",
-                "还有未导出的结果，确定要退出吗？\n"
-                "There are unexported results. Are you sure you want to exit?",
+                "确认退出",
+                "还有未导出的结果，确定要退出吗？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
