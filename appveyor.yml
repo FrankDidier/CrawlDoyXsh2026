@@ -4,14 +4,37 @@
 image: Visual Studio 2022
 
 environment:
-  PYTHON: "C:\\Python311"
+  matrix:
+    - PYTHON: "C:\\Python311-x64"
+      PYTHON_VERSION: "3.11"
+      PYTHON_ARCH: "64"
+
+init:
+  - "ECHO Python %PYTHON_VERSION% (%PYTHON_ARCH%-bit)"
 
 install:
-  - "%PYTHON%\\python.exe -m pip install --upgrade pip"
-  - "%PYTHON%\\python.exe -m pip install -r requirements.txt"
+  # Ensure Python is in PATH
+  - "SET PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%"
+  
+  # Verify Python version
+  - "python --version"
+  - "pip --version"
+  
+  # Upgrade pip
+  - "python -m pip install --upgrade pip setuptools wheel"
+  
+  # Install dependencies
+  - "pip install PySide6>=6.5.0"
+  - "pip install pyperclip>=1.8.2"
+  - "pip install openpyxl>=3.1.0"
+  - "pip install pyinstaller>=6.0.0"
+  - "pip install validators>=0.22.0"
 
 build_script:
-  - "%PYTHON%\\python.exe -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --collect-all=PySide6 run.py"
+  - "SET PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%"
+  - "python -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --collect-all=PySide6 run.py"
+
+test: off
 
 artifacts:
   - path: dist\ShareLinkExtractor.exe
@@ -20,7 +43,7 @@ artifacts:
 deploy:
   provider: GitHub
   auth_token:
-    secure: YOUR_ENCRYPTED_TOKEN_HERE  # Replace with your encrypted token
+    secure: YOUR_ENCRYPTED_TOKEN_HERE
   artifact: ShareLinkExtractor-Windows
   draft: false
   prerelease: false
