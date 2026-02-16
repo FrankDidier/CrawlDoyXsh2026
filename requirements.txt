@@ -1,0 +1,17 @@
+# ShareLink Extractor - Dependencies
+# Python 3.9+ required
+
+# GUI Framework
+PySide6>=6.5.0
+
+# For clipboard operations (cross-platform)
+pyperclip>=1.8.2
+
+# For Excel export
+openpyxl>=3.1.0
+
+# For building Windows executable
+pyinstaller>=6.0.0
+
+# For URL validation
+validators>=0.22.0

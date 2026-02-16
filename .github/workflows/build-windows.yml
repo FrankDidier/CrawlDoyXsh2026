@@ -1,0 +1,62 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build executable
+      run: |
+        python -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --add-data "src;src" --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --collect-all=PySide6 run.py
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ShareLinkExtractor-Windows
+        path: dist/ShareLinkExtractor.exe
+        retention-days: 30
+
+  # Create release when tag is pushed
+  release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ShareLinkExtractor-Windows
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ShareLinkExtractor.exe
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
