@@ -1,0 +1,28 @@
+# AppVeyor CI configuration for building Windows executable
+# Free for open source projects: https://www.appveyor.com/
+
+image: Visual Studio 2022
+
+environment:
+  PYTHON: "C:\\Python311"
+
+install:
+  - "%PYTHON%\\python.exe -m pip install --upgrade pip"
+  - "%PYTHON%\\python.exe -m pip install -r requirements.txt"
+
+build_script:
+  - "%PYTHON%\\python.exe -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --collect-all=PySide6 run.py"
+
+artifacts:
+  - path: dist\ShareLinkExtractor.exe
+    name: ShareLinkExtractor-Windows
+
+deploy:
+  provider: GitHub
+  auth_token:
+    secure: YOUR_ENCRYPTED_TOKEN_HERE  # Replace with your encrypted token
+  artifact: ShareLinkExtractor-Windows
+  draft: false
+  prerelease: false
+  on:
+    APPVEYOR_REPO_TAG: true
