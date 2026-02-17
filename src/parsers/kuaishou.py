@@ -12,14 +12,14 @@ class KuaishouParser(BaseParser):
     
     platform = Platform.KUAISHOU
     
-    # URL patterns for Kuaishou
+    # URL patterns for Kuaishou - updated to capture full URLs
     URL_PATTERNS = [
-        r'https?://v\.kuaishou\.com/[A-Za-z0-9]+/?',  # Short share link
-        r'https?://www\.kuaishou\.com/short-video/[A-Za-z0-9]+',  # Short video
-        r'https?://www\.kuaishou\.com/f/[A-Za-z0-9]+',  # Share link
-        r'https?://live\.kuaishou\.com/u/[A-Za-z0-9]+',  # Live stream
-        r'https?://www\.kuaishou\.com/profile/[A-Za-z0-9]+',  # Profile
-        r'https?://c\.kuaishou\.com/fw/photo/[A-Za-z0-9]+',  # Photo/video
+        r'https?://v\.kuaishou\.com/[A-Za-z0-9_-]+/?',  # Short share link
+        r'https?://www\.kuaishou\.com/short-video/[A-Za-z0-9_-]+',  # Short video
+        r'https?://www\.kuaishou\.com/f/[A-Za-z0-9_-]+',  # Share link
+        r'https?://live\.kuaishou\.com/u/[A-Za-z0-9_-]+',  # Live stream
+        r'https?://www\.kuaishou\.com/profile/[A-Za-z0-9_-]+',  # Profile
+        r'https?://c\.kuaishou\.com/fw/photo/[A-Za-z0-9_-]+',  # Photo/video
     ]
     
     # Pattern to detect Kuaishou content
@@ -65,7 +65,7 @@ class KuaishouParser(BaseParser):
         if account_name:
             result.account_name = account_name
         
-        # Extract account ID
+        # Extract account ID (快手号)
         account_id = self._extract_account_id(text)
         if account_id:
             result.account_id = account_id
@@ -90,7 +90,6 @@ class KuaishouParser(BaseParser):
             r'【([^】]+)】',  # Chinese brackets
             r'「([^」]+)」',  # Alternative brackets
             r'"([^"]+)"的(?:快手|作品)',  # Quoted name
-            r'@([^\s]+)的(?:快手|作品)',  # @mention
         ]
         
         for pattern in patterns:
@@ -103,15 +102,21 @@ class KuaishouParser(BaseParser):
         return ""
     
     def _extract_account_id(self, text: str) -> str:
-        """Extract account ID if present"""
+        """
+        Extract account ID (快手号) if present in text.
+        
+        Note: 快手号 is usually NOT in the share text.
+        Users need to click profile menu to see it.
+        """
         patterns = [
-            r'快手号[：:]\s*(\w+)',
-            r'ID[：:]\s*(\w+)',
-            r'@([A-Za-z0-9_]+)',
+            r'快手号[：:]\s*([A-Za-z0-9_]+)',  # 快手号: xxx
+            r'ID[：:]\s*([A-Za-z0-9_]+)',      # ID: xxx
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text)
             if match:
-                return match.group(1).strip()
+                account_id = match.group(1).strip()
+                if len(account_id) >= 4:
+                    return account_id
         return ""

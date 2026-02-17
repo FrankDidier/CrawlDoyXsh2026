@@ -76,9 +76,13 @@ class MainWindow(QMainWindow):
         self.input_text.setObjectName("inputArea")
         self.input_text.setPlaceholderText(
             "在此粘贴分享文本...\n\n"
+            "格式示例:\n"
+            "分享文本内容... https://v.douyin.com/xxxxx/\n"
+            "抖音号: wyp6666688688\n\n"
+            "提示: 抖音号/快手号需要点击个人主页右上角⋯查看\n\n"
             "支持的平台:\n"
-            "• 抖音 - 直播/短视频\n"
-            "• 快手 - 直播/短视频\n"
+            "• 抖音 - 直播/短视频 (点⋯获取抖音号)\n"
+            "• 快手 - 直播/短视频 (点⋯获取快手号)\n"
             "• 淘宝 - 商品/店铺\n"
             "• 京东 - 商品/店铺"
         )

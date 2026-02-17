@@ -12,11 +12,11 @@ class DouyinParser(BaseParser):
     
     platform = Platform.DOUYIN
     
-    # URL patterns for Douyin
+    # URL patterns for Douyin - updated to capture full URLs with underscores
     URL_PATTERNS = [
-        r'https?://v\.douyin\.com/[A-Za-z0-9]+/?',  # Short share link
-        r'https?://www\.douyin\.com/video/\d+',      # Direct video link
-        r'https?://live\.douyin\.com/\d+',           # Live stream link
+        r'https?://v\.douyin\.com/[A-Za-z0-9_-]+/?',  # Short share link (with underscores)
+        r'https?://www\.douyin\.com/video/\d+',        # Direct video link
+        r'https?://live\.douyin\.com/\d+',             # Live stream link
         r'https?://www\.douyin\.com/user/[A-Za-z0-9_-]+',  # User profile
     ]
     
@@ -63,7 +63,7 @@ class DouyinParser(BaseParser):
         if account_name:
             result.account_name = account_name
         
-        # Extract account ID if present
+        # Extract account ID (抖音号) if present in text
         account_id = self._extract_account_id(text)
         if account_id:
             result.account_id = account_id
@@ -79,7 +79,9 @@ class DouyinParser(BaseParser):
         for pattern in self.URL_PATTERNS:
             match = re.search(pattern, text)
             if match:
-                return self._clean_url(match.group(0))
+                url = match.group(0)
+                # Clean trailing slash if present
+                return self._clean_url(url)
         return ""
     
     def _extract_account_name(self, text: str) -> str:
@@ -100,16 +102,24 @@ class DouyinParser(BaseParser):
         return ""
     
     def _extract_account_id(self, text: str) -> str:
-        """Extract account ID if present in text"""
-        # Look for patterns like @username or 抖音号:xxx
+        """
+        Extract account ID (抖音号) if present in text.
+        
+        Note: 抖音号 is usually NOT in the share text.
+        Users need to click ⋯ on the profile page to see it.
+        If user pastes text with "抖音号: xxx", we can extract it.
+        """
+        # Look for patterns like 抖音号:xxx or 抖音号：xxx
         patterns = [
-            r'抖音号[：:]\s*(\w+)',
-            r'@([A-Za-z0-9_]+)',
-            r'ID[：:]\s*(\w+)',
+            r'抖音号[：:]\s*([A-Za-z0-9_]+)',  # 抖音号: wyp6666688688
+            r'ID[：:]\s*([A-Za-z0-9_]+)',      # ID: xxx
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text)
             if match:
-                return match.group(1).strip()
+                account_id = match.group(1).strip()
+                # Validate - 抖音号 is usually alphanumeric, at least 4 chars
+                if len(account_id) >= 4:
+                    return account_id
         return ""
