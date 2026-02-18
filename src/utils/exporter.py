@@ -122,3 +122,79 @@ class Exporter:
         """Generate a filename with timestamp"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{prefix}_{timestamp}.{extension}"
+    
+    @staticmethod
+    def to_excel_from_dicts(data: list, filepath: str) -> bool:
+        """Export list of dictionaries to Excel"""
+        if not HAS_OPENPYXL:
+            return False
+        
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "抓取结果"
+            
+            if not data:
+                return False
+            
+            # Headers
+            headers = list(data[0].keys())
+            
+            # Style
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            thin_border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+            
+            # Write headers
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = thin_border
+            
+            # Write data
+            for row_idx, row_data in enumerate(data, 2):
+                for col_idx, header in enumerate(headers, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=row_data.get(header, ""))
+                    cell.border = thin_border
+            
+            # Auto-adjust columns
+            for col in ws.columns:
+                max_length = 0
+                column = col[0].column_letter
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                ws.column_dimensions[column].width = min(max_length + 2, 50)
+            
+            wb.save(filepath)
+            return True
+        except Exception as e:
+            print(f"Excel export error: {e}")
+            return False
+    
+    @staticmethod
+    def to_csv_from_dicts(data: list, filepath: str) -> bool:
+        """Export list of dictionaries to CSV"""
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                if not data:
+                    return False
+                
+                fieldnames = list(data[0].keys())
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for row in data:
+                    writer.writerow(row)
+            
+            return True
+        except Exception as e:
+            print(f"CSV export error: {e}")
+            return False
