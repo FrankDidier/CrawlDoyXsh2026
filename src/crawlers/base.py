@@ -28,6 +28,7 @@ class CrawlStatus(Enum):
     """Crawl operation status"""
     IDLE = "空闲"
     RUNNING = "运行中"
+    WAITING = "等待验证"  # Waiting for CAPTCHA
     PAUSED = "暂停"
     COMPLETED = "完成"
     ERROR = "错误"
@@ -81,12 +82,21 @@ class CrawlProgress:
     total: int = 0
     current: int = 0
     message: str = ""
+    _percentage_override: int = None  # Allow explicit percentage override
     
     @property
     def percentage(self) -> int:
+        # Use override if set
+        if self._percentage_override is not None:
+            return self._percentage_override
+        # Otherwise calculate from current/total
         if self.total == 0:
             return 0
         return int((self.current / self.total) * 100)
+    
+    @percentage.setter
+    def percentage(self, value: int):
+        self._percentage_override = value
 
 
 class BaseCrawler:
@@ -111,7 +121,8 @@ class BaseCrawler:
         self._result_callback = callback
     
     def _update_progress(self, status: CrawlStatus = None, total: int = None, 
-                         current: int = None, message: str = None):
+                         current: int = None, message: str = None, 
+                         percentage: int = None):
         """Update progress and notify callback"""
         if status is not None:
             self.progress.status = status
@@ -121,6 +132,8 @@ class BaseCrawler:
             self.progress.current = current
         if message is not None:
             self.progress.message = message
+        if percentage is not None:
+            self.progress.percentage = percentage
         
         if self._progress_callback:
             self._progress_callback(self.progress)

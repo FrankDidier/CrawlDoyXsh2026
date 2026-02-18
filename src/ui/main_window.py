@@ -331,6 +331,20 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(
             f"状态: {progress.status.value} | {progress.message}"
         )
+        
+        # Change label color based on status
+        if progress.status == CrawlStatus.WAITING:
+            # Orange/warning for CAPTCHA
+            self.progress_label.setStyleSheet("color: #ff9500; font-weight: bold; font-size: 14px;")
+        elif progress.status == CrawlStatus.ERROR:
+            # Red for error
+            self.progress_label.setStyleSheet("color: #ff3b30; font-weight: bold;")
+        elif progress.status == CrawlStatus.COMPLETED:
+            # Green for success
+            self.progress_label.setStyleSheet("color: #34c759;")
+        else:
+            # Normal gray
+            self.progress_label.setStyleSheet("color: #888;")
     
     def on_result_added(self, result: CrawlResult):
         """Handle new result"""
