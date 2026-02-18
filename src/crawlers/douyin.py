@@ -27,6 +27,7 @@ class DouyinCrawler(BaseCrawler):
     
     # Douyin URLs
     BASE_URL = "https://www.douyin.com"
+    LIVE_URL = "https://live.douyin.com"  # Separate live streaming site
     SEARCH_URL = "https://www.douyin.com/search/{keyword}?type={type}"
     
     # Search type mapping
@@ -61,30 +62,63 @@ class DouyinCrawler(BaseCrawler):
         self._playwright = None
     
     async def _init_browser(self, headless: bool = False):
-        """Initialize browser"""
+        """Initialize browser - uses system Chrome with existing login"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
         
         self._update_progress(message="正在启动浏览器...")
         
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=headless,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-            ]
-        )
         
-        # Create context with anti-detection
-        self._context = await self._browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            locale='zh-CN',
-        )
+        # Try to use system Chrome with existing profile for logged-in session
+        import os
+        import sys
         
-        self._page = await self._context.new_page()
+        # Get Chrome user data directory based on OS
+        if sys.platform == 'darwin':  # macOS
+            chrome_user_data = os.path.expanduser('~/Library/Application Support/Google/Chrome')
+        elif sys.platform == 'win32':  # Windows
+            chrome_user_data = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data')
+        else:  # Linux
+            chrome_user_data = os.path.expanduser('~/.config/google-chrome')
+        
+        # Use persistent context to share Chrome login state
+        try:
+            # Create a copy directory for playwright to avoid conflicts with running Chrome
+            playwright_user_data = os.path.expanduser('~/.crawler_chrome_profile')
+            
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                playwright_user_data,
+                headless=headless,
+                channel='chrome',  # Use installed Chrome instead of Chromium
+                viewport={'width': 1920, 'height': 1080},
+                locale='zh-CN',
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                ],
+            )
+            self._browser = None  # persistent_context doesn't use separate browser
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            
+        except Exception as e:
+            print(f"无法使用Chrome，回退到Chromium: {e}")
+            # Fallback to regular Chromium if Chrome not available
+            self._browser = await self._playwright.chromium.launch(
+                headless=headless,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                ]
+            )
+            self._context = await self._browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                locale='zh-CN',
+            )
+            self._page = await self._context.new_page()
         
         # Additional anti-detection
         await self._page.add_init_script("""
@@ -94,11 +128,13 @@ class DouyinCrawler(BaseCrawler):
     
     async def _close_browser(self):
         """Close browser"""
+        if self._context:
+            await self._context.close()
+            self._context = None
+            self._page = None
         if self._browser:
             await self._browser.close()
             self._browser = None
-            self._context = None
-            self._page = None
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
@@ -264,16 +300,21 @@ class DouyinCrawler(BaseCrawler):
             # Always use non-headless for CAPTCHA handling
             await self._init_browser(headless=False)
             
-            # Build search URL
-            search_type = self.TYPE_MAP[content_type]
-            url = self.SEARCH_URL.format(
-                keyword=quote(keyword),
-                type=search_type
-            )
+            # Different URL strategy based on content type
+            if content_type == ContentType.LIVE:
+                # Use live.douyin.com for live streams (no CAPTCHA required)
+                url = f"{self.LIVE_URL}/"
+                self._update_progress(message="正在打开直播页面...")
+            else:
+                # Use search for videos
+                search_type = self.TYPE_MAP[content_type]
+                url = self.SEARCH_URL.format(
+                    keyword=quote(keyword),
+                    type=search_type
+                )
+                self._update_progress(message="正在打开搜索页面...")
             
-            self._update_progress(message="正在打开搜索页面...")
-            
-            # Navigate to search page
+            # Navigate to page
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
             # Wait for initial load
@@ -334,43 +375,30 @@ class DouyinCrawler(BaseCrawler):
         return self.results
     
     async def _crawl_live_streams(self, max_results: int):
-        """Crawl live stream results"""
+        """Crawl live stream results from live.douyin.com"""
         self._update_progress(message="正在抓取直播间...")
         
         collected = 0
         scroll_count = 0
-        max_scrolls = 30  # More scrolls to get more results
+        max_scrolls = 30
         no_new_results_count = 0
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Check for CAPTCHA periodically
-            if scroll_count % 5 == 0 and scroll_count > 0:
-                await self._check_and_handle_captcha()
+            # Find all live room links on live.douyin.com
+            # Pattern: https://live.douyin.com/{room_id}
+            all_links = await self._page.query_selector_all('a')
             
-            # Use multiple strategies to find live stream elements
-            cards = []
+            live_links = []
+            for link in all_links:
+                href = await link.get_attribute('href')
+                if href and 'live.douyin.com/' in href:
+                    # Check if it's a room link (has numeric ID)
+                    import re
+                    if re.search(r'live\.douyin\.com/\d+', href):
+                        live_links.append(link)
             
-            # Strategy 1: Find by data attribute
-            cards = await self._page.query_selector_all('[data-e2e*="live"]')
-            
-            # Strategy 2: Find all links with /live/ in href
-            if not cards:
-                links = await self._page.query_selector_all('a[href*="/live/"]')
-                for link in links:
-                    parent = await link.evaluate_handle('el => el.closest("div")')
-                    if parent:
-                        cards.append(parent)
-            
-            # Strategy 3: Use XPath to find li elements containing live links
-            if not cards:
-                cards = await self._page.query_selector_all('xpath=//li[.//a[contains(@href, "/live/")]]')
-            
-            # Strategy 4: Find any container with live link
-            if not cards:
-                cards = await self._page.query_selector_all('xpath=//*[.//a[contains(@href, "/live/")] and not(ancestor::*[.//a[contains(@href, "/live/")]])]')
-            
-            current_count = len(cards)
+            current_count = len(live_links)
             self._update_progress(
                 total=max_results,
                 current=collected,
@@ -379,12 +407,12 @@ class DouyinCrawler(BaseCrawler):
             )
             
             new_results_this_round = 0
-            for card in cards:
+            for link in live_links:
                 if collected >= max_results or self._cancelled:
                     break
                 
                 try:
-                    result = await self._extract_live_info(card)
+                    result = await self._extract_live_info_from_link(link)
                     if result and result.url and result.url not in seen_urls:
                         seen_urls.add(result.url)
                         self._add_result(result)
@@ -392,7 +420,8 @@ class DouyinCrawler(BaseCrawler):
                         new_results_this_round += 1
                         self._update_progress(
                             current=collected,
-                            percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0
+                            percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                            message=f"已抓取 {collected}/{max_results} 个直播间"
                         )
                 except Exception as e:
                     print(f"提取直播信息失败: {e}")
@@ -401,16 +430,73 @@ class DouyinCrawler(BaseCrawler):
             # Check if we're getting new results
             if new_results_this_round == 0:
                 no_new_results_count += 1
-                if no_new_results_count >= 5:
-                    self._update_progress(message="没有更多新结果了")
-                    break
+                if no_new_results_count >= 3:
+                    self._update_progress(message="滚动加载更多...")
             else:
                 no_new_results_count = 0
             
+            # Stop if no more results after many scrolls
+            if no_new_results_count >= 8:
+                self._update_progress(message="没有更多新结果了")
+                break
+            
             # Scroll to load more
-            await self._page.evaluate('window.scrollBy(0, 800)')
+            await self._page.evaluate('window.scrollBy(0, 1000)')
             await asyncio.sleep(2)
             scroll_count += 1
+    
+    async def _extract_live_info_from_link(self, link) -> Optional[CrawlResult]:
+        """Extract live stream info from a link element on live.douyin.com"""
+        try:
+            href = await link.get_attribute('href')
+            if not href:
+                return None
+            
+            # Clean up URL
+            url = href.split('?')[0]  # Remove query params
+            if not url.startswith('http'):
+                url = 'https:' + url if url.startswith('//') else self.LIVE_URL + url
+            
+            # Extract room ID from URL
+            import re
+            room_match = re.search(r'/(\d+)$', url)
+            room_id = room_match.group(1) if room_match else ""
+            
+            # Try to get account name from parent element
+            account_name = ""
+            title = ""
+            
+            try:
+                # Get parent container
+                parent = await link.evaluate_handle('el => el.closest("div[class]") || el.parentElement')
+                if parent:
+                    parent_text = await parent.evaluate('el => el.innerText')
+                    lines = [l.strip() for l in parent_text.split('\n') if l.strip()]
+                    
+                    # Filter out numeric-only lines (viewer counts)
+                    text_lines = [l for l in lines if not l.replace(',', '').isdigit() and len(l) > 1]
+                    
+                    if text_lines:
+                        # Usually: title, then account name
+                        if len(text_lines) >= 2:
+                            title = text_lines[0]
+                            account_name = text_lines[1]
+                        elif len(text_lines) == 1:
+                            account_name = text_lines[0]
+            except:
+                pass
+            
+            return CrawlResult(
+                platform=self.platform,
+                content_type=ContentType.LIVE,
+                url=url,
+                title=title[:100] if title else "",
+                account_id=room_id,
+                account_name=account_name[:50] if account_name else "",
+            )
+        except Exception as e:
+            print(f"提取直播失败: {e}")
+            return None
     
     async def _extract_live_info(self, card) -> Optional[CrawlResult]:
         """Extract information from a live stream card"""
