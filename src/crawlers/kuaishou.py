@@ -4,6 +4,7 @@ Kuaishou (快手) crawler for searching and extracting live streams and videos.
 
 import asyncio
 import re
+import hashlib
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -113,18 +114,19 @@ class KuaishouCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False)
             
-            # Use live.kuaishou.com for live streams
+            # Use live.kuaishou.com for live streams, recommend page for videos
             if content_type == ContentType.LIVE:
                 url = f"{self.LIVE_URL}/"
                 self._update_progress(message="正在打开快手直播页面...")
             else:
-                url = f"{self.BASE_URL}/search/video?searchKey={quote(keyword)}"
-                self._update_progress(message="正在打开快手搜索页面...")
+                # Use recommend page instead of search (search often has errors)
+                url = f"{self.BASE_URL}/new-reco"
+                self._update_progress(message="正在打开快手推荐页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)  # Wait for video feed to load
             
-            self._update_progress(message="正在加载搜索结果...")
+            self._update_progress(message="正在加载内容...")
             
             if content_type == ContentType.LIVE:
                 await self._crawl_live_streams(max_results)
@@ -268,83 +270,122 @@ class KuaishouCrawler(BaseCrawler):
             return None
     
     async def _crawl_videos(self, max_results: int, keyword: str):
-        """Crawl video results from kuaishou.com search"""
+        """Crawl video results from kuaishou.com feed interface"""
         self._update_progress(message="正在抓取快手短视频...")
         
+        # Kuaishou uses a TikTok-style feed - need to extract from page state
         collected = 0
         scroll_count = 0
-        max_scrolls = max(50, max_results // 10)
+        max_scrolls = max(max_results * 2, 50)  # May need multiple scrolls per video
         no_new_results_count = 0
-        seen_urls = set()
+        seen_ids = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Find video links
-            video_links = await self._page.query_selector_all('a[href*="/short-video/"]')
-            
-            self._update_progress(
-                total=max_results,
-                current=collected,
-                percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"找到 {len(video_links)} 个视频，已抓取 {collected} 个"
-            )
-            
-            new_results_this_round = 0
-            for link in video_links:
-                if collected >= max_results or self._cancelled:
-                    break
+            try:
+                # Try to extract current video info from page
+                video_info = await self._extract_current_video()
                 
-                try:
-                    href = await link.get_attribute('href')
-                    if not href or href in seen_urls:
-                        continue
+                if video_info and video_info['id'] not in seen_ids:
+                    seen_ids.add(video_info['id'])
                     
-                    if href.startswith('/'):
-                        href = self.BASE_URL + href
-                    
-                    # Extract video ID
-                    match = re.search(r'/short-video/([^/?]+)', href)
-                    video_id = match.group(1) if match else ""
-                    
-                    # Get text content
-                    parent = await link.evaluate_handle('el => el.closest("div") || el.parentElement')
-                    text = ""
-                    account_name = ""
-                    if parent:
-                        text = await parent.evaluate('el => el.innerText')
-                        lines = [l.strip() for l in text.split('\n') if l.strip()]
-                        if lines:
-                            account_name = lines[-1] if len(lines) > 1 else ""
+                    # Build URL
+                    url = f"https://www.kuaishou.com/short-video/{video_info['id']}"
                     
                     # Generate share text
-                    display_name = account_name[:30] if account_name else f"视频{video_id}"
-                    share_text = f"#快手短视频# 来看看【{display_name}】的精彩视频！ {href}"
+                    display_name = video_info.get('author', '')[:30] or f"视频{video_info['id'][:8]}"
+                    title = video_info.get('title', '')[:50] or '精彩视频'
+                    share_text = f"#快手短视频# 来看看【{display_name}】的精彩视频！ {title} {url}"
                     
                     result = CrawlResult(
                         platform=self.platform,
                         content_type=ContentType.VIDEO,
-                        url=href,
+                        url=url,
                         share_text=share_text,
-                        title=text[:100] if text else "",
-                        account_id=video_id,
-                        account_name=account_name[:50] if account_name else "",
+                        title=video_info.get('title', '')[:100],
+                        account_id=video_info['id'],
+                        account_name=video_info.get('author', '')[:50],
                     )
                     
-                    seen_urls.add(href)
                     self._add_result(result)
                     collected += 1
-                    new_results_this_round += 1
                     
-                except Exception as e:
-                    print(f"提取快手视频信息失败: {e}")
-                    continue
-            
-            if new_results_this_round == 0:
+                    self._update_progress(
+                        total=max_results,
+                        current=collected,
+                        percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                        message=f"已抓取 {collected}/{max_results} 个短视频"
+                    )
+                    
+                    no_new_results_count = 0
+                else:
+                    no_new_results_count += 1
+                    if no_new_results_count >= 15:
+                        self._update_progress(message="没有更多新视频了")
+                        break
+                
+                # Scroll down to next video (Kuaishou feed style)
+                await self._page.keyboard.press('ArrowDown')
+                await asyncio.sleep(1.5)
+                scroll_count += 1
+                
+            except Exception as e:
+                print(f"抓取视频失败: {e}")
                 no_new_results_count += 1
-                if no_new_results_count >= 5:
-                    break
-            else:
-                no_new_results_count = 0
+                await asyncio.sleep(1)
+                scroll_count += 1
+    
+    async def _extract_current_video(self) -> Optional[dict]:
+        """Extract info from currently displayed video"""
+        try:
+            # Get video info from page content
+            info = {}
             
-            await self._page.evaluate('window.scrollBy(0, 1000)')
-            await asyncio.sleep(2)
-            scroll_count += 1
+            # Look for author name - typically has @ prefix
+            author_elem = await self._page.query_selector('[class*="author"], [class*="nickname"], [class*="name"]')
+            if author_elem:
+                author_text = await author_elem.inner_text()
+                info['author'] = author_text.replace('@', '').strip()[:50]
+            
+            # Look for video title/description
+            title_elem = await self._page.query_selector('[class*="caption"], [class*="desc"], [class*="title"]')
+            if title_elem:
+                title_text = await title_elem.inner_text()
+                info['title'] = title_text.strip()[:100]
+            
+            # Try to get video ID from URL or page content
+            current_url = self._page.url
+            match = re.search(r'/(?:short-video|photo)/([^/?]+)', current_url)
+            if match:
+                info['id'] = match.group(1)
+            else:
+                # Try extracting from page state via JavaScript
+                video_id = await self._page.evaluate('''() => {
+                    // Look for video ID in various places
+                    const url = window.location.href;
+                    let match = url.match(/\\/(?:short-video|photo)\\/([^\\/?]+)/);
+                    if (match) return match[1];
+                    
+                    // Try video element
+                    const video = document.querySelector('video');
+                    if (video && video.src) {
+                        match = video.src.match(/photoId=([^&]+)/);
+                        if (match) return match[1];
+                    }
+                    
+                    return null;
+                }''')
+                if video_id:
+                    info['id'] = video_id
+            
+            if not info.get('id'):
+                # Generate unique ID from content
+                import hashlib
+                content = (info.get('author', '') + info.get('title', ''))
+                if content:
+                    info['id'] = hashlib.md5(content.encode()).hexdigest()[:12]
+            
+            return info if info.get('id') else None
+            
+        except Exception as e:
+            print(f"提取视频信息失败: {e}")
+            return None

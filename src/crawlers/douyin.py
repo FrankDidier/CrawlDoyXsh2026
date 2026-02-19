@@ -701,15 +701,21 @@ class DouyinCrawler(BaseCrawler):
         """Crawl video results"""
         self._update_progress(message="正在抓取短视频...")
         
+        # First check for CAPTCHA - this is common on Douyin search pages
+        await self._check_and_handle_captcha()
+        
+        # Wait for content after CAPTCHA
+        await asyncio.sleep(3)
+        
         collected = 0
         scroll_count = 0
-        max_scrolls = 30
+        max_scrolls = max(50, max_results // 5)  # Scale scrolls based on max_results
         no_new_results_count = 0
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
             # Check for CAPTCHA periodically
-            if scroll_count % 5 == 0 and scroll_count > 0:
+            if scroll_count % 3 == 0:
                 await self._check_and_handle_captcha()
             
             # Find video cards using multiple strategies
@@ -855,10 +861,15 @@ class DouyinCrawler(BaseCrawler):
             title = title[:150] if title else ""
             account_name = account_name[:50] if account_name else ""
             
+            # Generate APP-style share text
+            display_name = account_name if account_name else f"视频{video_id}"
+            share_text = f"#在抖音，记录美好生活# {title if title else '精彩视频'} {url}"
+            
             return CrawlResult(
                 platform=self.platform,
                 content_type=ContentType.VIDEO,
                 url=url,
+                share_text=share_text,
                 title=title.strip(),
                 account_id=video_id,
                 account_name=account_name.strip(),
