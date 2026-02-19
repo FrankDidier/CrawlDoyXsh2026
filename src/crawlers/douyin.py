@@ -380,7 +380,8 @@ class DouyinCrawler(BaseCrawler):
         
         collected = 0
         scroll_count = 0
-        max_scrolls = 30
+        # Scale max_scrolls based on desired results (roughly 20-30 results per scroll)
+        max_scrolls = max(50, max_results // 10)  # Allow many more scrolls for large requests
         no_new_results_count = 0
         seen_urls = set()
         

@@ -137,9 +137,10 @@ class MainWindow(QMainWindow):
         
         search_layout.addWidget(QLabel("最大数量:"), 0, 4)
         self.max_results_spin = QSpinBox()
-        self.max_results_spin.setRange(10, 500)
-        self.max_results_spin.setValue(50)
-        self.max_results_spin.setSingleStep(10)
+        self.max_results_spin.setRange(10, 100000)  # Allow up to 100,000
+        self.max_results_spin.setValue(100)
+        self.max_results_spin.setSingleStep(100)
+        self.max_results_spin.setToolTip("建议: 100-1000条。抓取数千条可能需要较长时间。")
         search_layout.addWidget(self.max_results_spin, 0, 5)
         
         # Row 2: Keyword input
