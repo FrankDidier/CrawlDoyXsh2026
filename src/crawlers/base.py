@@ -50,6 +50,9 @@ class CrawlResult:
     account_name: str = ""
     followers: str = ""
     
+    # APP share text (formatted like mobile app share)
+    share_text: str = ""
+    
     # For e-commerce (Taobao, JD)
     store_name: str = ""
     product_name: str = ""
@@ -64,6 +67,7 @@ class CrawlResult:
             "平台": self.platform.value,
             "类型": self.content_type.value,
             "链接": self.url,
+            "APP分享文本": self.share_text,
             "标题": self.title,
             "账号ID": self.account_id,
             "账号名称": self.account_name,

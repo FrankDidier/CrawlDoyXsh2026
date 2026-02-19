@@ -195,9 +195,9 @@ class MainWindow(QMainWindow):
         results_layout = QVBoxLayout(results_group)
         
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(6)
+        self.results_table.setColumnCount(7)
         self.results_table.setHorizontalHeaderLabels([
-            "序号", "链接", "账号ID", "账号名称", "标题", "抓取时间"
+            "序号", "APP分享文本", "链接", "账号ID", "账号名称", "标题", "抓取时间"
         ])
         
         # Table settings
@@ -210,10 +210,11 @@ class MainWindow(QMainWindow):
         
         # Column widths
         self.results_table.setColumnWidth(0, 50)
-        self.results_table.setColumnWidth(1, 300)
-        self.results_table.setColumnWidth(2, 120)
-        self.results_table.setColumnWidth(3, 120)
-        self.results_table.setColumnWidth(4, 200)
+        self.results_table.setColumnWidth(1, 400)  # APP分享文本 - wider
+        self.results_table.setColumnWidth(2, 250)
+        self.results_table.setColumnWidth(3, 100)
+        self.results_table.setColumnWidth(4, 100)
+        self.results_table.setColumnWidth(5, 150)
         
         results_layout.addWidget(self.results_table)
         
@@ -358,11 +359,12 @@ class MainWindow(QMainWindow):
         self.results_table.insertRow(row)
         
         self.results_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-        self.results_table.setItem(row, 1, QTableWidgetItem(result.url))
-        self.results_table.setItem(row, 2, QTableWidgetItem(result.account_id))
-        self.results_table.setItem(row, 3, QTableWidgetItem(result.account_name))
-        self.results_table.setItem(row, 4, QTableWidgetItem(result.title))
-        self.results_table.setItem(row, 5, QTableWidgetItem(result.crawled_at))
+        self.results_table.setItem(row, 1, QTableWidgetItem(result.share_text))  # APP分享文本
+        self.results_table.setItem(row, 2, QTableWidgetItem(result.url))
+        self.results_table.setItem(row, 3, QTableWidgetItem(result.account_id))
+        self.results_table.setItem(row, 4, QTableWidgetItem(result.account_name))
+        self.results_table.setItem(row, 5, QTableWidgetItem(result.title))
+        self.results_table.setItem(row, 6, QTableWidgetItem(result.crawled_at))
     
     def on_crawl_finished(self):
         """Handle crawl completion"""

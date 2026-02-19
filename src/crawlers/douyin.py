@@ -446,6 +446,46 @@ class DouyinCrawler(BaseCrawler):
             await asyncio.sleep(2)
             scroll_count += 1
     
+    async def _convert_to_app_share_links(self):
+        """
+        Phase 2: Convert web URLs to APP share links (v.douyin.com format).
+        This is slower as we need to enter each room.
+        """
+        total = len(self.results)
+        self._update_progress(
+            message=f"正在获取APP分享链接 (0/{total})...",
+            percentage=0
+        )
+        
+        for i, result in enumerate(self.results):
+            if self._cancelled:
+                break
+            
+            # Skip if already has v.douyin.com link
+            if 'v.douyin.com' in result.url:
+                continue
+            
+            self._update_progress(
+                message=f"正在获取APP分享链接 ({i+1}/{total})...",
+                percentage=int((i / total) * 100)
+            )
+            
+            # Try to get APP share link
+            share_link = await self._get_app_share_link(result.url)
+            
+            if share_link:
+                # Update the result with the APP share link
+                # Store original web URL in a different field if needed
+                result.url = share_link
+            
+            # Small delay to avoid rate limiting
+            await asyncio.sleep(0.5)
+        
+        self._update_progress(
+            message=f"APP分享链接获取完成!",
+            percentage=100
+        )
+    
     async def _extract_live_info_from_link(self, link) -> Optional[CrawlResult]:
         """Extract live stream info from a link element on live.douyin.com"""
         try:
@@ -487,16 +527,89 @@ class DouyinCrawler(BaseCrawler):
             except:
                 pass
             
+            # Generate APP-style share text
+            display_name = account_name[:30] if account_name else f"直播间{room_id}"
+            share_text = f"#在抖音，记录美好生活#【{display_name}】正在直播，来和我一起支持Ta吧。复制下方链接，打开【抖音】，直接观看直播！ {url}"
+            
             return CrawlResult(
                 platform=self.platform,
                 content_type=ContentType.LIVE,
                 url=url,
+                share_text=share_text,
                 title=title[:100] if title else "",
                 account_id=room_id,
                 account_name=account_name[:50] if account_name else "",
             )
         except Exception as e:
             print(f"提取直播失败: {e}")
+            return None
+    
+    async def _get_app_share_link(self, room_url: str) -> Optional[str]:
+        """
+        Get the APP share link (v.douyin.com) for a live room.
+        This requires entering the room and clicking share button.
+        """
+        try:
+            # Open the live room in a new tab
+            new_page = await self._context.new_page()
+            
+            try:
+                await new_page.goto(room_url, wait_until='domcontentloaded', timeout=15000)
+                await asyncio.sleep(2)
+                
+                # Look for share button and click it
+                share_selectors = [
+                    '[class*="share"]',
+                    'button:has-text("分享")',
+                    '[data-e2e*="share"]',
+                    'xpath=//div[contains(text(), "分享")]',
+                    'xpath=//*[contains(@class, "share")]',
+                ]
+                
+                share_btn = None
+                for sel in share_selectors:
+                    try:
+                        share_btn = await new_page.query_selector(sel)
+                        if share_btn and await share_btn.is_visible():
+                            break
+                    except:
+                        continue
+                
+                if share_btn:
+                    await share_btn.click()
+                    await asyncio.sleep(1)
+                    
+                    # Look for the copy link button or the link text
+                    link_selectors = [
+                        'input[value*="v.douyin.com"]',
+                        '[class*="link"] input',
+                        'xpath=//input[contains(@value, "douyin.com")]',
+                    ]
+                    
+                    for sel in link_selectors:
+                        try:
+                            link_input = await new_page.query_selector(sel)
+                            if link_input:
+                                share_link = await link_input.get_attribute('value')
+                                if share_link and 'v.douyin.com' in share_link:
+                                    return share_link
+                        except:
+                            continue
+                    
+                    # Try to find link in page content
+                    content = await new_page.content()
+                    import re
+                    match = re.search(r'https://v\.douyin\.com/[A-Za-z0-9_-]+/?', content)
+                    if match:
+                        return match.group(0)
+                
+                return None
+                
+            finally:
+                await new_page.close()
+                
+        except Exception as e:
+            print(f"获取分享链接失败: {e}")
             return None
     
     async def _extract_live_info(self, card) -> Optional[CrawlResult]:
