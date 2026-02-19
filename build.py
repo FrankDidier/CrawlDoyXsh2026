@@ -71,7 +71,13 @@ def build_executable(release_mode=False):
         '--hidden-import=PySide6.QtWidgets',
         '--hidden-import=PySide6.QtGui',
         '--hidden-import=openpyxl',
+        '--hidden-import=playwright',
+        '--hidden-import=playwright.sync_api',
+        '--hidden-import=playwright.async_api',
+        '--hidden-import=greenlet',
+        '--hidden-import=asyncio',
         '--collect-all=PySide6',
+        '--collect-all=playwright',
         '--noconfirm',  # Replace output without confirmation
     ]
     

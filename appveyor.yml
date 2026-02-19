@@ -29,10 +29,17 @@ install:
   - "pip install openpyxl>=3.1.0"
   - "pip install pyinstaller>=6.0.0"
   - "pip install validators>=0.22.0"
+  - "pip install playwright>=1.40.0"
+  - "pip install greenlet"
+  - "pip install beautifulsoup4"
+  - "pip install lxml"
+  
+  # Install Playwright browsers (chromium)
+  - "python -m playwright install chromium"
 
 build_script:
   - "SET PATH=%PYTHON%;%PYTHON%\\Scripts;%PATH%"
-  - "python -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --collect-all=PySide6 run.py"
+  - "python -m PyInstaller --name=ShareLinkExtractor --onefile --windowed --noconfirm --clean --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtWidgets --hidden-import=PySide6.QtGui --hidden-import=openpyxl --hidden-import=playwright --hidden-import=playwright.sync_api --hidden-import=playwright.async_api --hidden-import=greenlet --collect-all=PySide6 --collect-all=playwright run.py"
 
 test: off
 
