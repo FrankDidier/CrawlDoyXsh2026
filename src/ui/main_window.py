@@ -21,6 +21,9 @@ from .styles import DARK_THEME
 from .help_dialog import HelpDialog
 from ..crawlers.base import CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
 from ..crawlers.douyin import DouyinCrawler
+from ..crawlers.kuaishou import KuaishouCrawler
+from ..crawlers.taobao import TaobaoCrawler
+from ..crawlers.jd import JDCrawler
 from ..utils.exporter import Exporter
 from ..utils.logger import logger
 
@@ -292,11 +295,16 @@ class MainWindow(QMainWindow):
         # Create appropriate crawler
         if platform == "抖音":
             self.crawler = DouyinCrawler()
+        elif platform == "快手":
+            self.crawler = KuaishouCrawler()
+        elif platform == "淘宝":
+            self.crawler = TaobaoCrawler()
+        elif platform == "京东":
+            self.crawler = JDCrawler()
         else:
             QMessageBox.information(
                 self, "提示", 
-                f"{platform}抓取功能开发中...\n\n"
-                "请先测试抖音功能，确认没问题后再开发其他平台。"
+                f"{platform}抓取功能暂不支持"
             )
             return
         
