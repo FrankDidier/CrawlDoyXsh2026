@@ -20,6 +20,7 @@ from enum import Enum
 class EmulatorType(Enum):
     """Supported Android emulators"""
     LDPLAYER = "ldplayer"      # 雷电模拟器
+    MUMU = "mumu"              # MuMu模拟器 (推荐，最快)
     NOXPLAYER = "noxplayer"    # 夜神模拟器
     BLUESTACKS = "bluestacks"  # 蓝叠模拟器
     GENERIC = "generic"        # 通用ADB
@@ -32,11 +33,15 @@ class EmulatorConfig:
     adb_path: str = "adb"  # Use system ADB by default
     device_id: Optional[str] = None  # e.g., "emulator-5554" or "127.0.0.1:5555"
     
-    # LDPlayer specific
+    # LDPlayer specific (雷电模拟器)
     ldplayer_path: str = r"C:\LDPlayer\LDPlayer9"
     ldplayer_adb_port: int = 5555
     
-    # NoxPlayer specific  
+    # MuMu specific (MuMu模拟器 - 推荐，最快)
+    mumu_path: str = r"C:\Program Files\Netease\MuMu Player 12"
+    mumu_adb_port: int = 16384  # MuMu default ADB port
+    
+    # NoxPlayer specific (夜神模拟器)
     noxplayer_path: str = r"C:\Program Files\Nox\bin"
     noxplayer_adb_port: int = 62001
 
@@ -80,6 +85,9 @@ class ADBController:
         # Try to connect based on emulator type
         if self.config.emulator_type == EmulatorType.LDPLAYER:
             port = self.config.ldplayer_adb_port
+            self._device_id = f"127.0.0.1:{port}"
+        elif self.config.emulator_type == EmulatorType.MUMU:
+            port = self.config.mumu_adb_port
             self._device_id = f"127.0.0.1:{port}"
         elif self.config.emulator_type == EmulatorType.NOXPLAYER:
             port = self.config.noxplayer_adb_port
@@ -244,6 +252,12 @@ def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
         EmulatorType.LDPLAYER: [
             r"C:\LDPlayer\LDPlayer9\adb.exe",
             r"C:\LDPlayer\LDPlayer4.0\adb.exe",
+            r"C:\leidian\LDPlayer9\adb.exe",
+        ],
+        EmulatorType.MUMU: [
+            r"C:\Program Files\Netease\MuMu Player 12\shell\adb.exe",
+            r"C:\Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            r"C:\Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
         ],
         EmulatorType.NOXPLAYER: [
             r"C:\Program Files\Nox\bin\adb.exe",
@@ -257,5 +271,42 @@ def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
     for path in paths.get(emulator_type, []):
         if os.path.exists(path):
             return path
+    
+    return None
+
+
+def detect_running_emulator() -> Optional[EmulatorType]:
+    """
+    Auto-detect which emulator is currently running.
+    Returns the EmulatorType if found, None otherwise.
+    """
+    # Check common ADB ports
+    port_map = {
+        5555: EmulatorType.LDPLAYER,
+        5556: EmulatorType.LDPLAYER,
+        16384: EmulatorType.MUMU,
+        16416: EmulatorType.MUMU,
+        62001: EmulatorType.NOXPLAYER,
+        62025: EmulatorType.NOXPLAYER,
+    }
+    
+    try:
+        result = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
+        output = result.stdout
+        
+        for line in output.split('\n'):
+            if '\tdevice' in line:
+                device = line.split('\t')[0]
+                if ':' in device:
+                    port = int(device.split(':')[1])
+                    if port in port_map:
+                        return port_map[port]
+        
+        # If device found but port not recognized, return generic
+        if 'device' in output:
+            return EmulatorType.GENERIC
+            
+    except Exception:
+        pass
     
     return None

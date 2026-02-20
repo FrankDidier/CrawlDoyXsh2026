@@ -27,9 +27,17 @@ from ..crawlers.jd import JDCrawler
 from ..utils.exporter import Exporter
 from ..utils.logger import logger
 
+# Try to import emulator support
+try:
+    from ..crawlers.emulator_base import EmulatorType, detect_running_emulator
+    from ..crawlers.douyin_emulator import DouyinEmulatorCrawler, check_emulator_ready
+    HAS_EMULATOR_SUPPORT = True
+except ImportError:
+    HAS_EMULATOR_SUPPORT = False
+
 
 class CrawlerWorker(QThread):
-    """Worker thread for running crawler"""
+    """Worker thread for running web crawler"""
     progress_updated = Signal(object)  # CrawlProgress
     result_added = Signal(object)      # CrawlResult
     finished = Signal()
@@ -68,6 +76,42 @@ class CrawlerWorker(QThread):
                 )
             finally:
                 loop.close()
+            
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class EmulatorWorker(QThread):
+    """Worker thread for running emulator-based crawler"""
+    progress_updated = Signal(object)  # CrawlProgress
+    result_added = Signal(object)      # CrawlResult
+    finished = Signal()
+    error = Signal(str)
+    
+    def __init__(self, crawler, keyword: str, content_type: ContentType, max_results: int):
+        super().__init__()
+        self.crawler = crawler
+        self.keyword = keyword
+        self.content_type = content_type
+        self.max_results = max_results
+    
+    def run(self):
+        try:
+            # Set up callbacks
+            self.crawler.set_progress_callback(
+                lambda p: self.progress_updated.emit(p)
+            )
+            self.crawler.set_result_callback(
+                lambda r: self.result_added.emit(r)
+            )
+            
+            # Run emulator crawler (synchronous)
+            self.crawler.search(
+                self.keyword, 
+                self.content_type, 
+                self.max_results
+            )
             
             self.finished.emit()
         except Exception as e:
@@ -126,37 +170,65 @@ class MainWindow(QMainWindow):
         search_layout = QGridLayout(search_group)
         search_layout.setSpacing(15)
         
+        # Row 0: Mode selection (Web / APP Emulator)
+        search_layout.addWidget(QLabel("模式:"), 0, 0)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["网页版", "APP版 (模拟器)"])
+        self.mode_combo.setToolTip(
+            "网页版: 通过浏览器抓取网页版链接\n"
+            "APP版: 通过模拟器抓取真实APP分享链接 (v.douyin.com)"
+        )
+        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        search_layout.addWidget(self.mode_combo, 0, 1)
+        
+        # Check emulator button
+        self.check_emu_btn = QPushButton("🔍 检查环境")
+        self.check_emu_btn.setToolTip("检查模拟器是否已安装并连接")
+        self.check_emu_btn.clicked.connect(self.check_emulator_environment)
+        self.check_emu_btn.setVisible(False)  # Hidden by default
+        search_layout.addWidget(self.check_emu_btn, 0, 2)
+        
+        # Emulator type selection
+        self.emu_type_label = QLabel("模拟器:")
+        self.emu_type_label.setVisible(False)
+        search_layout.addWidget(self.emu_type_label, 0, 3)
+        
+        self.emu_type_combo = QComboBox()
+        self.emu_type_combo.addItems(["雷电 (LDPlayer)", "MuMu", "夜神 (Nox)"])
+        self.emu_type_combo.setVisible(False)
+        search_layout.addWidget(self.emu_type_combo, 0, 4)
+        
         # Row 1: Platform and Type selection
-        search_layout.addWidget(QLabel("平台:"), 0, 0)
+        search_layout.addWidget(QLabel("平台:"), 1, 0)
         self.platform_combo = QComboBox()
         self.platform_combo.addItems(["抖音", "快手", "淘宝", "京东"])
         self.platform_combo.currentTextChanged.connect(self.on_platform_changed)
-        search_layout.addWidget(self.platform_combo, 0, 1)
+        search_layout.addWidget(self.platform_combo, 1, 1)
         
-        search_layout.addWidget(QLabel("类型:"), 0, 2)
+        search_layout.addWidget(QLabel("类型:"), 1, 2)
         self.type_combo = QComboBox()
         self.type_combo.addItems(["直播", "短视频"])
-        search_layout.addWidget(self.type_combo, 0, 3)
+        search_layout.addWidget(self.type_combo, 1, 3)
         
-        search_layout.addWidget(QLabel("最大数量:"), 0, 4)
+        search_layout.addWidget(QLabel("最大数量:"), 1, 4)
         self.max_results_spin = QSpinBox()
         self.max_results_spin.setRange(10, 100000)  # Allow up to 100,000
         self.max_results_spin.setValue(100)
         self.max_results_spin.setSingleStep(100)
         self.max_results_spin.setToolTip("建议: 100-1000条。抓取数千条可能需要较长时间。")
-        search_layout.addWidget(self.max_results_spin, 0, 5)
+        search_layout.addWidget(self.max_results_spin, 1, 5)
         
         # Row 2: Keyword input
-        search_layout.addWidget(QLabel("关键词:"), 1, 0)
+        search_layout.addWidget(QLabel("关键词:"), 2, 0)
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("输入要搜索的关键词，如: 美食、游戏、教育...")
         self.keyword_input.returnPressed.connect(self.start_crawl)
-        search_layout.addWidget(self.keyword_input, 1, 1, 1, 4)
+        search_layout.addWidget(self.keyword_input, 2, 1, 1, 4)
         
         # Headless checkbox
         self.headless_check = QCheckBox("后台运行")
         self.headless_check.setToolTip("勾选后浏览器在后台运行，不显示窗口")
-        search_layout.addWidget(self.headless_check, 1, 5)
+        search_layout.addWidget(self.headless_check, 2, 5)
         
         # Row 3: Buttons
         btn_layout = QHBoxLayout()
@@ -174,7 +246,7 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.stop_btn)
         btn_layout.addStretch()
         
-        search_layout.addLayout(btn_layout, 2, 0, 1, 6)
+        search_layout.addLayout(btn_layout, 3, 0, 1, 6)
         
         main_layout.addWidget(search_group)
         
@@ -256,6 +328,65 @@ class MainWindow(QMainWindow):
         """Apply the stylesheet"""
         self.setStyleSheet(DARK_THEME)
     
+    def on_mode_changed(self, mode: str):
+        """Handle mode selection change"""
+        logger.log_user_action(f"选择模式: {mode}")
+        
+        is_emulator = "APP" in mode
+        
+        # Show/hide emulator-specific controls
+        self.check_emu_btn.setVisible(is_emulator)
+        self.emu_type_label.setVisible(is_emulator)
+        self.emu_type_combo.setVisible(is_emulator)
+        
+        # Hide headless checkbox for emulator mode (not applicable)
+        self.headless_check.setVisible(not is_emulator)
+        
+        # Emulator mode only supports Douyin/Kuaishou
+        if is_emulator:
+            self.platform_combo.clear()
+            self.platform_combo.addItems(["抖音", "快手"])
+            self.status_bar.showMessage("APP模式: 请先检查环境，确保模拟器已启动")
+        else:
+            self.platform_combo.clear()
+            self.platform_combo.addItems(["抖音", "快手", "淘宝", "京东"])
+            self.status_bar.showMessage("网页模式: 选择平台和类型，输入关键词后点击开始抓取")
+    
+    def check_emulator_environment(self):
+        """Check if emulator environment is ready"""
+        logger.log_user_action("检查模拟器环境")
+        
+        if not HAS_EMULATOR_SUPPORT:
+            QMessageBox.warning(
+                self, "提示",
+                "模拟器功能暂不可用。\n\n"
+                "请确保已安装所有依赖。"
+            )
+            return
+        
+        status = check_emulator_ready()
+        
+        if status['ready']:
+            QMessageBox.information(
+                self, "环境检查",
+                f"✅ {status['message']}\n\n"
+                "可以开始抓取APP分享链接了！"
+            )
+            self.progress_label.setText("✓ 模拟器环境就绪")
+            self.progress_label.setStyleSheet("color: #34c759;")
+        else:
+            QMessageBox.warning(
+                self, "环境检查",
+                f"❌ {status['message']}\n\n"
+                "请参考以下步骤:\n"
+                "1. 安装雷电/MuMu/夜神模拟器\n"
+                "2. 启动模拟器\n"
+                "3. 在模拟器中安装抖音/快手APP\n"
+                "4. 再次点击检查环境"
+            )
+            self.progress_label.setText(f"⚠️ {status['message']}")
+            self.progress_label.setStyleSheet("color: #ff9500;")
+    
     def on_platform_changed(self, platform: str):
         """Handle platform selection change"""
         logger.log_user_action(f"选择平台: {platform}")
@@ -276,12 +407,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入搜索关键词")
             return
         
+        mode = self.mode_combo.currentText()
         platform = self.platform_combo.currentText()
         content_type_text = self.type_combo.currentText()
         max_results = self.max_results_spin.value()
-        headless = self.headless_check.isChecked()
         
-        logger.log_user_action(f"开始抓取: {platform} {content_type_text} '{keyword}'")
+        logger.log_user_action(f"开始抓取: [{mode}] {platform} {content_type_text} '{keyword}'")
         
         # Map to ContentType
         type_map = {
@@ -292,38 +423,94 @@ class MainWindow(QMainWindow):
         }
         content_type = type_map.get(content_type_text)
         
-        # Create appropriate crawler
-        if platform == "抖音":
-            self.crawler = DouyinCrawler()
-        elif platform == "快手":
-            self.crawler = KuaishouCrawler()
-        elif platform == "淘宝":
-            self.crawler = TaobaoCrawler()
-        elif platform == "京东":
-            self.crawler = JDCrawler()
-        else:
-            QMessageBox.information(
-                self, "提示", 
-                f"{platform}抓取功能暂不支持"
+        # Check if using emulator mode
+        is_emulator_mode = "APP" in mode
+        
+        if is_emulator_mode:
+            # Emulator mode - get real APP share links
+            if not HAS_EMULATOR_SUPPORT:
+                QMessageBox.warning(self, "提示", "模拟器功能暂不可用")
+                return
+            
+            # Map emulator type
+            emu_type_map = {
+                "雷电 (LDPlayer)": EmulatorType.LDPLAYER,
+                "MuMu": EmulatorType.MUMU,
+                "夜神 (Nox)": EmulatorType.NOXPLAYER,
+            }
+            emu_type = emu_type_map.get(self.emu_type_combo.currentText(), EmulatorType.LDPLAYER)
+            
+            # Create emulator crawler based on platform
+            if platform == "抖音":
+                from ..crawlers.douyin_emulator import DouyinEmulatorCrawler, DouyinEmulatorConfig
+                config = DouyinEmulatorConfig(emulator_type=emu_type)
+                self.crawler = DouyinEmulatorCrawler(config)
+            elif platform == "快手":
+                QMessageBox.information(
+                    self, "提示",
+                    "快手APP模拟器功能正在开发中...\n\n"
+                    "请先使用网页版或等待更新。"
+                )
+                return
+            else:
+                QMessageBox.warning(
+                    self, "提示",
+                    f"{platform}不支持APP模式\n\n"
+                    "淘宝/京东请使用网页版"
+                )
+                return
+            
+            # Disable UI
+            self._disable_crawl_ui()
+            
+            # Start emulator worker
+            self.worker = EmulatorWorker(
+                self.crawler, keyword, content_type, max_results
             )
-            return
+        else:
+            # Web mode
+            headless = self.headless_check.isChecked()
+            
+            # Create appropriate crawler
+            if platform == "抖音":
+                self.crawler = DouyinCrawler()
+            elif platform == "快手":
+                self.crawler = KuaishouCrawler()
+            elif platform == "淘宝":
+                self.crawler = TaobaoCrawler()
+            elif platform == "京东":
+                self.crawler = JDCrawler()
+            else:
+                QMessageBox.information(
+                    self, "提示", 
+                    f"{platform}抓取功能暂不支持"
+                )
+                return
+            
+            # Disable UI
+            self._disable_crawl_ui()
+            
+            # Start worker thread
+            self.worker = CrawlerWorker(
+                self.crawler, keyword, content_type, max_results, headless
+            )
         
-        # Disable UI
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.keyword_input.setEnabled(False)
-        self.platform_combo.setEnabled(False)
-        self.type_combo.setEnabled(False)
-        
-        # Start worker thread
-        self.worker = CrawlerWorker(
-            self.crawler, keyword, content_type, max_results, headless
-        )
+        # Connect signals
         self.worker.progress_updated.connect(self.on_progress_updated)
         self.worker.result_added.connect(self.on_result_added)
         self.worker.finished.connect(self.on_crawl_finished)
         self.worker.error.connect(self.on_crawl_error)
         self.worker.start()
+    
+    def _disable_crawl_ui(self):
+        """Disable UI during crawl"""
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.keyword_input.setEnabled(False)
+        self.platform_combo.setEnabled(False)
+        self.type_combo.setEnabled(False)
+        self.mode_combo.setEnabled(False)
+        self.emu_type_combo.setEnabled(False)
     
     def stop_crawl(self):
         """Stop crawling"""
@@ -407,6 +594,8 @@ class MainWindow(QMainWindow):
         self.keyword_input.setEnabled(True)
         self.platform_combo.setEnabled(True)
         self.type_combo.setEnabled(True)
+        self.mode_combo.setEnabled(True)
+        self.emu_type_combo.setEnabled(True)
         self.worker = None
     
     def copy_all_results(self):

@@ -27,6 +27,7 @@ class HelpDialog(QDialog):
         # Tab widget
         tabs = QTabWidget()
         tabs.addTab(self._create_usage_tab(), "📖 使用说明")
+        tabs.addTab(self._create_emulator_tab(), "📱 模拟器设置")
         tabs.addTab(self._create_install_tab(), "⚙️ 安装配置")
         tabs.addTab(self._create_faq_tab(), "❓ 常见问题")
         
@@ -97,20 +98,43 @@ class HelpDialog(QDialog):
         <h3 style="color: #2ed573;">功能介绍</h3>
         <p>本工具可以自动搜索并抓取各平台的数据:</p>
         <ul>
-            <li><b>抖音</b>: 直播间、短视频</li>
-            <li><b>快手</b>: 直播间、短视频 (开发中)</li>
-            <li><b>淘宝</b>: 店铺、商品 (开发中)</li>
-            <li><b>京东</b>: 店铺、商品 (开发中)</li>
+            <li><b>抖音</b>: 直播间、短视频 (支持网页版和APP版)</li>
+            <li><b>快手</b>: 直播间、短视频</li>
+            <li><b>淘宝</b>: 店铺、商品</li>
+            <li><b>京东</b>: 店铺、商品</li>
         </ul>
+        
+        <h3 style="color: #ffa502;">🔄 两种模式</h3>
+        <table border="1" cellpadding="8" style="border-collapse: collapse; width: 100%;">
+            <tr style="background-color: #0f3460;">
+                <th>模式</th>
+                <th>链接格式</th>
+                <th>速度</th>
+                <th>适用平台</th>
+            </tr>
+            <tr>
+                <td><b>网页版</b></td>
+                <td>live.douyin.com<br/>www.kuaishou.com</td>
+                <td>快</td>
+                <td>全部平台</td>
+            </tr>
+            <tr>
+                <td><b>APP版 (模拟器)</b></td>
+                <td>v.douyin.com<br/>(真正的APP分享链接)</td>
+                <td>慢</td>
+                <td>抖音、快手</td>
+            </tr>
+        </table>
         
         <h3 style="color: #2ed573;">使用步骤</h3>
         <ol>
-            <li><b>选择平台</b>: 从下拉菜单选择要搜索的平台 (如: 抖音)</li>
-            <li><b>选择类型</b>: 选择要搜索的内容类型 (如: 直播、短视频)</li>
-            <li><b>设置数量</b>: 设置最大抓取数量 (默认50条)</li>
+            <li><b>选择模式</b>: 网页版(快) 或 APP版(真实分享链接)</li>
+            <li><b>选择平台</b>: 从下拉菜单选择要搜索的平台</li>
+            <li><b>选择类型</b>: 选择要搜索的内容类型</li>
+            <li><b>设置数量</b>: 设置最大抓取数量</li>
             <li><b>输入关键词</b>: 在输入框输入搜索关键词</li>
             <li><b>开始抓取</b>: 点击"开始抓取"按钮</li>
-            <li><b>等待完成</b>: 浏览器会自动打开并搜索，请勿操作浏览器</li>
+            <li><b>等待完成</b>: 自动完成，请勿操作</li>
             <li><b>导出结果</b>: 抓取完成后，可导出为 Excel 或 CSV</li>
         </ol>
         
@@ -140,6 +164,77 @@ class HelpDialog(QDialog):
         </ol>
         <p>验证完成后，程序会自动继续抓取。</p>
         <p><b>提示:</b> 建议首次使用时不勾选"后台运行"，以便完成验证。</p>
+        """)
+        
+        layout.addWidget(browser)
+        return widget
+    
+    def _create_emulator_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml("""
+        <h2 style="color: #00d9ff;">📱 模拟器设置 (获取真实APP分享链接)</h2>
+        
+        <h3 style="color: #2ed573;">什么是APP版模式?</h3>
+        <p>APP版模式通过Android模拟器运行真正的抖音/快手APP，获取 <b>v.douyin.com</b> 格式的真实分享链接。</p>
+        
+        <h3 style="color: #ffa502;">推荐模拟器 (按速度排序)</h3>
+        <table border="1" cellpadding="8" style="border-collapse: collapse; width: 100%;">
+            <tr style="background-color: #0f3460;">
+                <th>模拟器</th>
+                <th>评分</th>
+                <th>下载地址</th>
+                <th>备注</th>
+            </tr>
+            <tr>
+                <td><b>MuMu模拟器</b></td>
+                <td>⭐ 3.8</td>
+                <td>mumu.163.com</td>
+                <td style="color: #2ed573;">✅ 最快！推荐</td>
+            </tr>
+            <tr>
+                <td>雷电模拟器9</td>
+                <td>⭐ 2.7</td>
+                <td>ldplayer.net</td>
+                <td>普通</td>
+            </tr>
+            <tr>
+                <td>夜神模拟器</td>
+                <td>⭐ 3.3</td>
+                <td>yeshen.com</td>
+                <td>可选</td>
+            </tr>
+        </table>
+        
+        <h3 style="color: #2ed573;">安装步骤</h3>
+        <ol>
+            <li><b>安装模拟器</b>: 下载并安装MuMu或雷电模拟器</li>
+            <li><b>启动模拟器</b>: 等待模拟器完全启动</li>
+            <li><b>安装抖音APP</b>: 在模拟器应用商店搜索"抖音"安装</li>
+            <li><b>登录抖音</b>: 打开抖音APP并登录账号</li>
+            <li><b>检查环境</b>: 在本工具中点击"检查环境"确认连接正常</li>
+        </ol>
+        
+        <h3 style="color: #2ed573;">性能预估</h3>
+        <table border="1" cellpadding="5" style="border-collapse: collapse;">
+            <tr style="background-color: #0f3460;">
+                <th>数量</th>
+                <th>预计时间</th>
+            </tr>
+            <tr><td>10条</td><td>~1分钟</td></tr>
+            <tr><td>100条</td><td>~5-10分钟</td></tr>
+            <tr><td>1000条</td><td>~1小时</td></tr>
+        </table>
+        
+        <h3 style="color: #ff4757;">⚠️ 注意事项</h3>
+        <ul>
+            <li>模拟器需要至少 <b>4GB内存</b></li>
+            <li>抓取时请勿操作模拟器</li>
+            <li>如果雷电9太卡，建议换用 <b>MuMu模拟器</b></li>
+        </ul>
         """)
         
         layout.addWidget(browser)
