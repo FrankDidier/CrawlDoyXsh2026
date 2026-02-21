@@ -271,10 +271,12 @@ def find_any_adb() -> Optional[str]:
     # Common relative paths for emulators
     relative_paths = [
         # MuMu Player 12 (multiple possible locations)
+        r"MuMuPlayer\shell\adb.exe",  # Client's path: D:\MuMuPlayer
+        r"MuMuPlayer\vms\MuMuPlayer-12.0-base\adb.exe",
+        r"MuMuPlayer-12.0\shell\adb.exe",
         r"Program Files\Netease\MuMu Player 12\shell\adb.exe",
         r"Netease\MuMu Player 12\shell\adb.exe",
         r"MuMu Player 12\shell\adb.exe",
-        r"MuMuPlayer-12.0\shell\adb.exe",
         r"Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
         # MuMu older versions
         r"MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",

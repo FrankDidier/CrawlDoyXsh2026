@@ -208,18 +208,49 @@ class KuaishouCrawler(BaseCrawler):
             try:
                 link_elem = await self._page.query_selector(f'a[href*="/u/{user_id}"]')
                 if link_elem:
-                    parent = await link_elem.evaluate_handle('el => el.closest("div[class]") || el.parentElement.parentElement')
+                    # Try to find specific author/nickname selectors first
+                    parent = await link_elem.evaluate_handle('el => el.closest("[class*=\'card\']") || el.closest("[class*=\'Card\']") || el.closest("div[class]") || el.parentElement.parentElement')
+                    
                     if parent:
-                        text = await parent.evaluate('el => el.innerText')
-                        lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 1]
+                        # Look for author name element
+                        for selector in ['[class*="author"]', '[class*="nickname"]', '[class*="name"]', '[class*="user"]', 'span[class]']:
+                            try:
+                                name_elem = await parent.evaluate_handle(f'el => el.querySelector("{selector}")')
+                                if name_elem:
+                                    name_text = await name_elem.evaluate('el => el.innerText')
+                                    if name_text and name_text.strip() and len(name_text.strip()) < 50:
+                                        # Verify it's a name, not a number or common UI text
+                                        clean_name = name_text.strip()
+                                        if not clean_name.replace(',', '').replace('万', '').replace('人', '').replace('在线', '').isdigit():
+                                            if '直播' not in clean_name and '观看' not in clean_name:
+                                                account_name = clean_name
+                                                break
+                            except:
+                                continue
                         
-                        # Filter out common UI elements
-                        text_lines = [l for l in lines if not l.replace(',', '').replace('万', '').isdigit()]
-                        
-                        if text_lines:
-                            account_name = text_lines[0] if text_lines else ""
-                            if len(text_lines) > 1:
-                                title = text_lines[1]
+                        # Fallback: parse all text
+                        if not account_name:
+                            text = await parent.evaluate('el => el.innerText')
+                            lines = [l.strip() for l in text.split('\n') if l.strip() and len(l.strip()) > 1]
+                            
+                            # Filter out numbers and common UI elements
+                            text_lines = []
+                            for l in lines:
+                                clean = l.replace(',', '').replace('万', '').replace('人', '')
+                                if not clean.isdigit() and '直播' not in l and '观看' not in l and '在线' not in l:
+                                    text_lines.append(l)
+                            
+                            if text_lines:
+                                # Shortest text that looks like a name
+                                for line in sorted(text_lines, key=len):
+                                    if 2 < len(line) < 30:
+                                        account_name = line
+                                        break
+                                # Title is usually longer
+                                for line in text_lines:
+                                    if line != account_name and len(line) > 5:
+                                        title = line
+                                        break
             except:
                 pass
             

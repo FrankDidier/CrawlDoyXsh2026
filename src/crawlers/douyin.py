@@ -460,29 +460,62 @@ class DouyinCrawler(BaseCrawler):
             room_match = re.search(r'/(\d+)$', url)
             room_id = room_match.group(1) if room_match else ""
             
-            # Try to get account name from parent element
+            # Try to get account name from various selectors
             account_name = ""
+            account_id = ""
             title = ""
             
             try:
-                # Get parent container
-                parent = await link.evaluate_handle('el => el.closest("div[class]") || el.parentElement')
+                # Get parent container - look for the card element
+                parent = await link.evaluate_handle('el => el.closest("[class*=\'Card\']") || el.closest("[class*=\'card\']") || el.closest("div[class]") || el.parentElement')
+                
                 if parent:
-                    parent_text = await parent.evaluate('el => el.innerText')
-                    lines = [l.strip() for l in parent_text.split('\n') if l.strip()]
+                    # Try to find author/nickname element
+                    for selector in ['[class*="author"]', '[class*="nickname"]', '[class*="name"]', '[class*="user"]']:
+                        try:
+                            name_elem = await parent.evaluate_handle(f'el => el.querySelector("{selector}")')
+                            if name_elem:
+                                name_text = await name_elem.evaluate('el => el.innerText')
+                                if name_text and name_text.strip():
+                                    account_name = name_text.strip()
+                                    break
+                        except:
+                            continue
                     
-                    # Filter out numeric-only lines (viewer counts)
-                    text_lines = [l for l in lines if not l.replace(',', '').isdigit() and len(l) > 1]
+                    # Get title (usually the main text)
+                    for selector in ['[class*="title"]', '[class*="desc"]', 'h2', 'h3']:
+                        try:
+                            title_elem = await parent.evaluate_handle(f'el => el.querySelector("{selector}")')
+                            if title_elem:
+                                title_text = await title_elem.evaluate('el => el.innerText')
+                                if title_text and title_text.strip():
+                                    title = title_text.strip()
+                                    break
+                        except:
+                            continue
                     
-                    if text_lines:
-                        # Usually: title, then account name
-                        if len(text_lines) >= 2:
-                            title = text_lines[0]
-                            account_name = text_lines[1]
-                        elif len(text_lines) == 1:
-                            account_name = text_lines[0]
+                    # Fallback: parse all text
+                    if not account_name:
+                        parent_text = await parent.evaluate('el => el.innerText')
+                        lines = [l.strip() for l in parent_text.split('\n') if l.strip()]
+                        text_lines = [l for l in lines if not l.replace(',', '').replace('万', '').replace('观看', '').isdigit() and len(l) > 1 and len(l) < 50]
+                        
+                        if text_lines:
+                            # First short line is likely the account name
+                            for line in text_lines:
+                                if len(line) < 30 and not any(x in line for x in ['直播', '观看', '在线', '人']):
+                                    account_name = line
+                                    break
+                            # Longer lines are likely title
+                            for line in text_lines:
+                                if line != account_name and len(line) > 5:
+                                    title = line
+                                    break
             except:
                 pass
+            
+            # Use room_id as account_id if we couldn't find the actual ID
+            account_id = account_id if account_id else room_id
             
             # Generate APP-style share text
             display_name = account_name[:30] if account_name else f"直播间{room_id}"
@@ -494,7 +527,7 @@ class DouyinCrawler(BaseCrawler):
                 url=url,
                 share_text=share_text,
                 title=title[:100] if title else "",
-                account_id=room_id,
+                account_id=account_id,
                 account_name=account_name[:50] if account_name else "",
             )
         except Exception as e:

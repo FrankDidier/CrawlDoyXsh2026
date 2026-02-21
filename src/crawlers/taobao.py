@@ -197,12 +197,24 @@ class TaobaoCrawler(BaseCrawler):
             # Check for login requirement
             await self._handle_login()
             
-            # Wait for user to apply filters if needed
+            # Wait for user to apply filters - check for user signal
             self._update_progress(
                 status=CrawlStatus.WAITING,
-                message="⏸️ 请在浏览器中设置筛选条件，完成后程序将在10秒后自动开始抓取..."
+                message="⏸️ 请在浏览器中设置筛选条件\n📌 完成后在浏览器地址栏末尾添加 #go 然后按回车开始抓取\n⏳ 或等待60秒后自动开始..."
             )
-            await asyncio.sleep(10)
+            
+            # Wait for user signal or timeout
+            for i in range(60):
+                await asyncio.sleep(1)
+                current_url = self._page.url
+                if '#go' in current_url:
+                    # User signaled ready, remove the #go from URL
+                    clean_url = current_url.replace('#go', '')
+                    await self._page.goto(clean_url, wait_until='domcontentloaded')
+                    await asyncio.sleep(2)
+                    break
+                if self._cancelled:
+                    return self.results
             
             self._update_progress(
                 status=CrawlStatus.RUNNING,
