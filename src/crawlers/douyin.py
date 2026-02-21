@@ -29,6 +29,7 @@ class DouyinCrawler(BaseCrawler):
     BASE_URL = "https://www.douyin.com"
     LIVE_URL = "https://live.douyin.com"  # Separate live streaming site
     SEARCH_URL = "https://www.douyin.com/search/{keyword}?type={type}"
+    # Note: live.douyin.com doesn't have search, use main site with type=live
     
     # Search type mapping
     TYPE_MAP = {
@@ -257,19 +258,13 @@ class DouyinCrawler(BaseCrawler):
             # Always use non-headless for CAPTCHA handling
             await self._init_browser(headless=False)
             
-            # Different URL strategy based on content type
-            if content_type == ContentType.LIVE:
-                # Use live.douyin.com for live streams (no CAPTCHA required)
-                url = f"{self.LIVE_URL}/"
-                self._update_progress(message="正在打开直播页面...")
-            else:
-                # Use search for videos
-                search_type = self.TYPE_MAP[content_type]
-                url = self.SEARCH_URL.format(
-                    keyword=quote(keyword),
-                    type=search_type
-                )
-                self._update_progress(message="正在打开搜索页面...")
+            # Both live and video use the main douyin.com search with different type parameter
+            search_type = self.TYPE_MAP[content_type]
+            url = self.SEARCH_URL.format(
+                keyword=quote(keyword),
+                type=search_type
+            )
+            self._update_progress(message=f"正在搜索: {keyword} (类型: {content_type.value})...")
             
             # Navigate to page
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
@@ -291,6 +286,32 @@ class DouyinCrawler(BaseCrawler):
             
             # Wait for page to fully load
             await asyncio.sleep(2)
+            
+            # Wait for user to confirm - allows them to handle any remaining issues
+            # and ensure search results are loaded
+            self._update_progress(
+                status=CrawlStatus.WAITING,
+                message="⏸️ 请确认搜索结果已加载，然后在浏览器地址栏末尾加上 #go 后按回车键继续抓取..."
+            )
+            
+            # Wait for user confirmation (add #go to URL)
+            max_wait = 120  # 2 minutes timeout
+            waited = 0
+            while waited < max_wait and not self._cancelled:
+                await asyncio.sleep(2)
+                waited += 2
+                
+                current_url = self._page.url
+                if '#go' in current_url:
+                    self._update_progress(message="✓ 用户确认，开始抓取...")
+                    await asyncio.sleep(1)
+                    break
+                
+                if waited % 10 == 0:
+                    self._update_progress(
+                        status=CrawlStatus.WAITING,
+                        message=f"⏸️ 等待确认... 请在地址栏加上 #go 后按回车 ({max_wait - waited}秒后自动继续)"
+                    )
             
             self._update_progress(message="正在加载搜索结果...")
             
@@ -332,7 +353,7 @@ class DouyinCrawler(BaseCrawler):
         return self.results
     
     async def _crawl_live_streams(self, max_results: int):
-        """Crawl live stream results from live.douyin.com"""
+        """Crawl live stream results from Douyin search page"""
         self._update_progress(message="正在抓取直播间...")
         
         collected = 0
@@ -343,18 +364,31 @@ class DouyinCrawler(BaseCrawler):
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Find all live room links on live.douyin.com
-            # Pattern: https://live.douyin.com/{room_id}
+            # Find all links that could be live streams
+            # On search page: look for live.douyin.com links or /live/ paths
             all_links = await self._page.query_selector_all('a')
             
             live_links = []
             for link in all_links:
                 href = await link.get_attribute('href')
-                if href and 'live.douyin.com/' in href:
-                    # Check if it's a room link (has numeric ID)
-                    import re
-                    if re.search(r'live\.douyin\.com/\d+', href):
-                        live_links.append(link)
+                if not href:
+                    continue
+                    
+                # Check for various live stream URL patterns
+                is_live = False
+                
+                # Pattern 1: https://live.douyin.com/{room_id}
+                if re.search(r'live\.douyin\.com/\d+', href):
+                    is_live = True
+                # Pattern 2: /live/{room_id} on main site
+                elif re.search(r'/live/\d+', href):
+                    is_live = True
+                # Pattern 3: webcast links
+                elif 'webcast' in href and re.search(r'\d{10,}', href):
+                    is_live = True
+                
+                if is_live:
+                    live_links.append(link)
             
             current_count = len(live_links)
             self._update_progress(

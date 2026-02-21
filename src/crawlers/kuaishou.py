@@ -27,6 +27,9 @@ class KuaishouCrawler(BaseCrawler):
     # Kuaishou URLs
     BASE_URL = "https://www.kuaishou.com"
     LIVE_URL = "https://live.kuaishou.com"
+    # Kuaishou search URLs - main site search with live/video type
+    SEARCH_LIVE_URL = "https://www.kuaishou.com/search/live?searchKey={keyword}"
+    SEARCH_VIDEO_URL = "https://www.kuaishou.com/search/video?searchKey={keyword}"
     
     def __init__(self):
         super().__init__()
@@ -85,17 +88,42 @@ class KuaishouCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False)
             
-            # Use live.kuaishou.com for live streams, recommend page for videos
+            # Use kuaishou.com search with keyword
             if content_type == ContentType.LIVE:
-                url = f"{self.LIVE_URL}/"
-                self._update_progress(message="正在打开快手直播页面...")
+                url = self.SEARCH_LIVE_URL.format(keyword=quote(keyword))
+                self._update_progress(message=f"正在搜索快手直播: {keyword}...")
             else:
-                # Use recommend page instead of search (search often has errors)
-                url = f"{self.BASE_URL}/new-reco"
-                self._update_progress(message="正在打开快手推荐页面...")
+                url = self.SEARCH_VIDEO_URL.format(keyword=quote(keyword))
+                self._update_progress(message=f"正在搜索快手短视频: {keyword}...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            await asyncio.sleep(5)  # Wait for video feed to load
+            await asyncio.sleep(5)  # Wait for content to load
+            
+            # Wait for user confirmation - allows them to handle login/CAPTCHA
+            # and ensure search results are loaded
+            self._update_progress(
+                status=CrawlStatus.WAITING,
+                message="⏸️ 请确认搜索结果已加载，然后在浏览器地址栏末尾加上 #go 后按回车键继续抓取..."
+            )
+            
+            # Wait for user confirmation (add #go to URL)
+            max_wait = 120  # 2 minutes timeout
+            waited = 0
+            while waited < max_wait and not self._cancelled:
+                await asyncio.sleep(2)
+                waited += 2
+                
+                current_url = self._page.url
+                if '#go' in current_url:
+                    self._update_progress(message="✓ 用户确认，开始抓取...")
+                    await asyncio.sleep(1)
+                    break
+                
+                if waited % 10 == 0:
+                    self._update_progress(
+                        status=CrawlStatus.WAITING,
+                        message=f"⏸️ 等待确认... 请在地址栏加上 #go 后按回车 ({max_wait - waited}秒后自动继续)"
+                    )
             
             self._update_progress(message="正在加载内容...")
             
@@ -129,7 +157,7 @@ class KuaishouCrawler(BaseCrawler):
         return self.results
     
     async def _crawl_live_streams(self, max_results: int):
-        """Crawl live stream results from live.kuaishou.com"""
+        """Crawl live stream results from Kuaishou search page"""
         self._update_progress(message="正在抓取快手直播间...")
         
         collected = 0
@@ -139,16 +167,25 @@ class KuaishouCrawler(BaseCrawler):
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Find all live room links - format: /u/{user_id}
-            all_links = await self._page.query_selector_all('a[href*="/u/"]')
+            # Find all live room links - look for various patterns
+            all_links = await self._page.query_selector_all('a')
             
             unique_hrefs = set()
             for link in all_links:
                 href = await link.get_attribute('href')
-                if href and '/u/' in href:
+                if not href:
+                    continue
+                    
+                # Check for user profile links that could be live streams
+                # Pattern 1: /u/{user_id}
+                # Pattern 2: live.kuaishou.com/u/{user_id}
+                # Pattern 3: short-video/{id}
+                if '/u/' in href or 'live.kuaishou' in href:
                     # Clean and normalize URL
                     if href.startswith('/'):
                         href = self.LIVE_URL + href
+                    elif href.startswith('//'):
+                        href = 'https:' + href
                     unique_hrefs.add(href.split('?')[0])  # Remove query params
             
             self._update_progress(
