@@ -310,12 +310,25 @@ class DouyinEmulatorCrawler:
             return None
 
 
-def check_emulator_ready() -> dict:
+def check_emulator_ready(emulator_type: str = "mumu") -> dict:
     """
     Check if emulator environment is ready.
+    
+    Args:
+        emulator_type: "ldplayer", "mumu", "noxplayer", or "bluestacks"
+    
     Returns dict with status info.
     """
-    from .emulator_base import find_any_adb, EmulatorConfig, EmulatorType
+    from .emulator_base import find_any_adb, get_emulator_adb_path, EmulatorConfig, EmulatorType
+    
+    # Map string to EmulatorType
+    type_map = {
+        "ldplayer": EmulatorType.LDPLAYER,
+        "mumu": EmulatorType.MUMU,
+        "noxplayer": EmulatorType.NOXPLAYER,
+        "bluestacks": EmulatorType.BLUESTACKS,
+    }
+    emu_type = type_map.get(emulator_type.lower(), EmulatorType.MUMU)
     
     status = {
         'adb_installed': False,
@@ -323,28 +336,36 @@ def check_emulator_ready() -> dict:
         'douyin_installed': False,
         'ready': False,
         'message': "",
-        'adb_path': ""
+        'adb_path': "",
+        'tried_ports': []
     }
     
-    # Check ADB - try to find any available ADB
-    adb_path = find_any_adb()
+    # Check ADB - first try emulator-specific path, then any ADB
+    adb_path = get_emulator_adb_path(emu_type)
+    if not adb_path:
+        adb_path = find_any_adb()
+    
     if adb_path:
         status['adb_installed'] = True
         status['adb_path'] = adb_path
+        print(f"Using ADB: {adb_path}")
     elif check_adb_installed():
         status['adb_installed'] = True
         status['adb_path'] = "adb"  # System ADB
     else:
         status['message'] = (
-            "ADB未安装。请确保:\n"
-            "1. 模拟器已完全启动\n"
-            "2. 如果使用MuMu，请确保安装在默认路径\n"
-            "3. 或手动安装Android SDK Platform Tools"
+            f"找不到ADB！\n\n"
+            f"模拟器类型: {emulator_type}\n"
+            f"请检查模拟器安装路径\n\n"
+            f"常见路径:\n"
+            f"• MuMu: D:\\MuMuPlayer\\shell\\adb.exe\n"
+            f"• 雷电: C:\\LDPlayer\\LDPlayer9\\adb.exe"
         )
         return status
     
-    # Create ADB controller with found path
+    # Create ADB controller with found path and correct emulator type
     config = EmulatorConfig()
+    config.emulator_type = emu_type
     if adb_path:
         config.adb_path = adb_path
     
@@ -354,11 +375,22 @@ def check_emulator_ready() -> dict:
     if adb.connect():
         status['emulator_connected'] = True
     else:
+        # Get list of ports we tried
+        if emu_type == EmulatorType.MUMU:
+            ports_tried = "16384, 7555, 16416, 7556"
+        elif emu_type == EmulatorType.LDPLAYER:
+            ports_tried = "5555, 5556, 5554"
+        else:
+            ports_tried = "多个端口"
+        
         status['message'] = (
-            "模拟器未连接。请确保:\n"
-            "1. 模拟器已完全启动（等待2分钟）\n"
-            "2. 模拟器显示桌面\n"
-            "3. 再次点击检查环境"
+            f"无法连接到{emulator_type}模拟器!\n\n"
+            f"已尝试端口: {ports_tried}\n\n"
+            f"请确保:\n"
+            f"1. 模拟器已完全启动（等待1-2分钟）\n"
+            f"2. 模拟器已显示桌面\n"
+            f"3. MuMu: 设置 → 其他设置 → 打开ADB调试\n"
+            f"4. 再次点击'检查环境'"
         )
         return status
     

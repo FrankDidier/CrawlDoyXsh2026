@@ -364,7 +364,16 @@ class MainWindow(QMainWindow):
             )
             return
         
-        status = check_emulator_ready()
+        # Get selected emulator type
+        emu_type_map = {
+            "雷电 (LDPlayer)": "ldplayer",
+            "MuMu": "mumu",
+            "夜神 (Nox)": "noxplayer",
+        }
+        selected_emu = self.emu_type_combo.currentText()
+        emu_type = emu_type_map.get(selected_emu, "mumu")
+        
+        status = check_emulator_ready(emu_type)
         
         if status['ready']:
             QMessageBox.information(

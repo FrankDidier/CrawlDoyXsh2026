@@ -40,6 +40,7 @@ class EmulatorConfig:
     # MuMu specific (MuMu模拟器 - 推荐，最快)
     mumu_path: str = r"C:\Program Files\Netease\MuMu Player 12"
     mumu_adb_port: int = 16384  # MuMu default ADB port
+    mumu_adb_ports: tuple = (16384, 7555, 16416, 7556)  # Try multiple ports
     
     # NoxPlayer specific (夜神模拟器)
     noxplayer_path: str = r"C:\Program Files\Nox\bin"
@@ -81,41 +82,48 @@ class ADBController:
             return False, str(e)
     
     def connect(self) -> bool:
-        """Connect to emulator"""
-        # Try to connect based on emulator type
+        """Connect to emulator - tries multiple ports for MuMu"""
+        ports_to_try = []
+        
+        # Determine which ports to try based on emulator type
         if self.config.emulator_type == EmulatorType.LDPLAYER:
-            port = self.config.ldplayer_adb_port
-            self._device_id = f"127.0.0.1:{port}"
+            ports_to_try = [self.config.ldplayer_adb_port, 5555, 5556, 5554]
         elif self.config.emulator_type == EmulatorType.MUMU:
-            port = self.config.mumu_adb_port
-            self._device_id = f"127.0.0.1:{port}"
+            # MuMu Player 12 can use different ports
+            ports_to_try = list(self.config.mumu_adb_ports) if hasattr(self.config, 'mumu_adb_ports') else [16384, 7555, 16416, 7556]
         elif self.config.emulator_type == EmulatorType.NOXPLAYER:
-            port = self.config.noxplayer_adb_port
-            self._device_id = f"127.0.0.1:{port}"
+            ports_to_try = [self.config.noxplayer_adb_port, 62001, 62025]
         else:
-            self._device_id = self.config.device_id
+            ports_to_try = [5555]  # Generic
         
-        # Connect via ADB
-        if self._device_id and ':' in self._device_id:
+        # Try each port
+        for port in ports_to_try:
+            self._device_id = f"127.0.0.1:{port}"
+            
+            # Try to connect via ADB
             success, output = self._run_adb('connect', self._device_id)
-            if not success and 'already connected' not in output.lower():
-                print(f"ADB connect failed: {output}")
-                return False
+            
+            # Check if connected
+            success, output = self._run_adb('devices')
+            if success:
+                for line in output.split('\n'):
+                    if self._device_id in line and '\tdevice' in line:
+                        print(f"Connected to emulator on port {port}")
+                        self._connected = True
+                        return True
         
-        # Check connection
+        # If specific port didn't work, try to find any connected device
         success, output = self._run_adb('devices')
-        if success and self._device_id and self._device_id.split(':')[0] in output:
-            self._connected = True
-            return True
+        if success:
+            lines = output.strip().split('\n')
+            for line in lines[1:]:  # Skip header
+                if '\tdevice' in line:
+                    self._device_id = line.split('\t')[0]
+                    print(f"Found device: {self._device_id}")
+                    self._connected = True
+                    return True
         
-        # Try to find any connected device
-        lines = output.strip().split('\n')
-        for line in lines[1:]:  # Skip header
-            if '\tdevice' in line:
-                self._device_id = line.split('\t')[0]
-                self._connected = True
-                return True
-        
+        print(f"Failed to connect. ADB devices output: {output}")
         return False
     
     def disconnect(self):
@@ -320,36 +328,61 @@ def find_any_adb() -> Optional[str]:
 
 
 def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
-    """Get ADB path for specific emulator"""
-    paths = {
+    """Get ADB path for specific emulator - searches all drives"""
+    
+    # Get all available drives on Windows
+    drives = ['C', 'D', 'E', 'F']  # Common drives
+    if os.name == 'nt':
+        import string
+        drives = [letter for letter in string.ascii_uppercase if os.path.exists(f"{letter}:\\")]
+    
+    # Relative paths for each emulator type (without drive letter)
+    relative_paths = {
         EmulatorType.LDPLAYER: [
-            r"C:\LDPlayer\LDPlayer9\adb.exe",
-            r"C:\LDPlayer\LDPlayer4.0\adb.exe",
-            r"C:\leidian\LDPlayer9\adb.exe",
-            r"C:\leidian\LDPlayer4.0\adb.exe",
+            r"LDPlayer\LDPlayer9\adb.exe",
+            r"LDPlayer\LDPlayer4.0\adb.exe",
+            r"leidian\LDPlayer9\adb.exe",
+            r"leidian\LDPlayer4.0\adb.exe",
+            r"Program Files\LDPlayer\LDPlayer9\adb.exe",
+            r"Program Files (x86)\LDPlayer\LDPlayer9\adb.exe",
         ],
         EmulatorType.MUMU: [
-            r"C:\Program Files\Netease\MuMu Player 12\shell\adb.exe",
-            r"C:\Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe",
-            r"C:\Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
-            r"C:\Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
-            r"C:\Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
-            r"C:\Program Files\Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            # MuMu Player 12 paths
+            r"MuMuPlayer\shell\adb.exe",  # D:\MuMuPlayer\shell\adb.exe
+            r"MuMuPlayer\vms\MuMuPlayer-12.0-base\adb.exe",
+            r"MuMu Player 12\shell\adb.exe",
+            r"Netease\MuMu Player 12\shell\adb.exe",
+            r"Program Files\Netease\MuMu Player 12\shell\adb.exe",
+            r"Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe",
+            r"Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
+            # Older MuMu paths
+            r"MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            r"Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            r"Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            r"Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
         ],
         EmulatorType.NOXPLAYER: [
-            r"C:\Program Files\Nox\bin\adb.exe",
-            r"C:\Program Files (x86)\Nox\bin\nox_adb.exe",
+            r"Nox\bin\adb.exe",
+            r"Nox\bin\nox_adb.exe",
+            r"Program Files\Nox\bin\adb.exe",
+            r"Program Files (x86)\Nox\bin\nox_adb.exe",
         ],
         EmulatorType.BLUESTACKS: [
-            r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe",
+            r"Program Files\BlueStacks_nxt\HD-Adb.exe",
+            r"Program Files (x86)\BlueStacks_nxt\HD-Adb.exe",
+            r"BlueStacks_nxt\HD-Adb.exe",
         ],
     }
     
-    for path in paths.get(emulator_type, []):
-        if os.path.exists(path):
-            return path
+    # Search all drives for each path
+    for drive in drives:
+        for rel_path in relative_paths.get(emulator_type, []):
+            full_path = f"{drive}:\\{rel_path}"
+            if os.path.exists(full_path):
+                print(f"Found ADB at: {full_path}")
+                return full_path
     
-    # If specific emulator ADB not found, try any available ADB
+    # Fallback: use find_any_adb
     return find_any_adb()
 
 
@@ -358,14 +391,24 @@ def detect_running_emulator() -> Optional[EmulatorType]:
     Auto-detect which emulator is currently running.
     Returns the EmulatorType if found, None otherwise.
     """
-    # Check common ADB ports
+    # Check common ADB ports (different emulator versions use different ports)
     port_map = {
+        # LDPlayer (雷电)
         5555: EmulatorType.LDPLAYER,
         5556: EmulatorType.LDPLAYER,
+        5554: EmulatorType.LDPLAYER,
+        # MuMu Player 12 (common ports)
         16384: EmulatorType.MUMU,
         16416: EmulatorType.MUMU,
+        7555: EmulatorType.MUMU,  # MuMu 12 alternate
+        7556: EmulatorType.MUMU,
+        # NoxPlayer (夜神)
         62001: EmulatorType.NOXPLAYER,
         62025: EmulatorType.NOXPLAYER,
+        62026: EmulatorType.NOXPLAYER,
+        # BlueStacks
+        5565: EmulatorType.BLUESTACKS,
+        5575: EmulatorType.BLUESTACKS,
     }
     
     try:
