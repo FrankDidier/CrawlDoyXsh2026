@@ -256,33 +256,61 @@ def check_adb_installed() -> bool:
 
 
 def find_any_adb() -> Optional[str]:
-    """Find any available ADB executable"""
-    # All possible ADB paths
-    all_paths = [
-        # MuMu Player 12 (newest)
-        r"C:\Program Files\Netease\MuMu Player 12\shell\adb.exe",
-        r"C:\Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe",
-        r"C:\Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
+    """Find any available ADB executable by searching all drives"""
+    # Search all available drives on Windows
+    drives = []
+    if os.name == 'nt':  # Windows
+        import string
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                drives.append(letter)
+    else:
+        drives = ['']  # Unix-like systems don't have drive letters
+    
+    # Common relative paths for emulators
+    relative_paths = [
+        # MuMu Player 12 (multiple possible locations)
+        r"Program Files\Netease\MuMu Player 12\shell\adb.exe",
+        r"Netease\MuMu Player 12\shell\adb.exe",
+        r"MuMu Player 12\shell\adb.exe",
+        r"MuMuPlayer-12.0\shell\adb.exe",
+        r"Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
         # MuMu older versions
-        r"C:\Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
-        r"C:\Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
-        r"C:\Program Files\Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
-        # LDPlayer
-        r"C:\LDPlayer\LDPlayer9\adb.exe",
-        r"C:\LDPlayer\LDPlayer4.0\adb.exe",
-        r"C:\leidian\LDPlayer9\adb.exe",
-        r"C:\leidian\LDPlayer4.0\adb.exe",
-        # NoxPlayer
-        r"C:\Program Files\Nox\bin\adb.exe",
-        r"C:\Program Files (x86)\Nox\bin\nox_adb.exe",
+        r"MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        r"Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        r"Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        # LDPlayer (雷电)
+        r"LDPlayer\LDPlayer9\adb.exe",
+        r"LDPlayer9\adb.exe",
+        r"leidian\LDPlayer9\adb.exe",
+        r"LDPlayer\LDPlayer4.0\adb.exe",
+        r"Program Files\LDPlayer\LDPlayer9\adb.exe",
+        # NoxPlayer (夜神)
+        r"Program Files\Nox\bin\adb.exe",
+        r"Program Files (x86)\Nox\bin\nox_adb.exe",
+        r"Nox\bin\adb.exe",
         # BlueStacks
-        r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe",
-        # Android SDK (if installed)
+        r"Program Files\BlueStacks_nxt\HD-Adb.exe",
+    ]
+    
+    # Search each drive for each path
+    for drive in drives:
+        for rel_path in relative_paths:
+            if drive:
+                full_path = f"{drive}:\\{rel_path}"
+            else:
+                full_path = f"/{rel_path}"
+            
+            if os.path.exists(full_path):
+                return full_path
+    
+    # Also try Android SDK paths
+    sdk_paths = [
         os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
         os.path.expandvars(r"%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe"),
     ]
-    
-    for path in all_paths:
+    for path in sdk_paths:
         if os.path.exists(path):
             return path
     
