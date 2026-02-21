@@ -116,7 +116,7 @@ class JDCrawler(BaseCrawler):
             self._update_progress(message="正在打开京东搜索页面...")
             
             await self._page.goto(url, wait_until='networkidle', timeout=60000)
-            await asyncio.sleep(5)
+            await asyncio.sleep(8)  # Increased delay to avoid rate limiting
             
             # Wait for products to load
             try:
@@ -181,8 +181,8 @@ class JDCrawler(BaseCrawler):
         no_new_results_count = 0
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Wait for page to be stable
-            await asyncio.sleep(1)
+            # Wait for page to be stable - longer delay to avoid rate limiting
+            await asyncio.sleep(3)
             
             try:
                 # Find product items with store info - JD uses various selectors

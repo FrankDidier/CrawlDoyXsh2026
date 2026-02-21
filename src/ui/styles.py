@@ -227,13 +227,81 @@ QToolTip {
     padding: 6px;
 }
 
+QLineEdit {
+    background-color: #16213e;
+    border: 2px solid #0f3460;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 15px;
+    font-weight: bold;
+    color: #ffffff;
+    selection-background-color: #00d9ff;
+    selection-color: #1a1a2e;
+}
+
+QLineEdit:focus {
+    border-color: #00d9ff;
+    background-color: #1a2a4e;
+}
+
+QLineEdit::placeholder {
+    color: #666;
+}
+
+QSpinBox {
+    background-color: #16213e;
+    border: 2px solid #0f3460;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #ffffff;
+    font-size: 14px;
+}
+
+QSpinBox:focus {
+    border-color: #00d9ff;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    background-color: #0f3460;
+    border: none;
+    width: 20px;
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background-color: #00d9ff;
+}
+
+QCheckBox {
+    color: #e0e0e0;
+    font-size: 13px;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #0f3460;
+    border-radius: 4px;
+    background-color: #16213e;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #00d9ff;
+    border-color: #00d9ff;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #00d9ff;
+}
+
 QComboBox {
     background-color: #16213e;
     border: 2px solid #0f3460;
     border-radius: 8px;
     padding: 8px 12px;
-    color: #e0e0e0;
+    color: #ffffff;
     min-width: 150px;
+    font-size: 14px;
 }
 
 QComboBox:hover {
