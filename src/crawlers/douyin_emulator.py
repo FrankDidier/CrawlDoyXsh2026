@@ -315,27 +315,51 @@ def check_emulator_ready() -> dict:
     Check if emulator environment is ready.
     Returns dict with status info.
     """
+    from .emulator_base import find_any_adb, EmulatorConfig, EmulatorType
+    
     status = {
         'adb_installed': False,
         'emulator_connected': False,
         'douyin_installed': False,
         'ready': False,
-        'message': ""
+        'message': "",
+        'adb_path': ""
     }
     
-    # Check ADB
-    if check_adb_installed():
+    # Check ADB - try to find any available ADB
+    adb_path = find_any_adb()
+    if adb_path:
         status['adb_installed'] = True
+        status['adb_path'] = adb_path
+    elif check_adb_installed():
+        status['adb_installed'] = True
+        status['adb_path'] = "adb"  # System ADB
     else:
-        status['message'] = "ADB未安装。请安装Android模拟器（雷电、夜神等）"
+        status['message'] = (
+            "ADB未安装。请确保:\n"
+            "1. 模拟器已完全启动\n"
+            "2. 如果使用MuMu，请确保安装在默认路径\n"
+            "3. 或手动安装Android SDK Platform Tools"
+        )
         return status
     
-    # Check emulator connection
-    adb = ADBController()
+    # Create ADB controller with found path
+    config = EmulatorConfig()
+    if adb_path:
+        config.adb_path = adb_path
+    
+    adb = ADBController(config)
+    
+    # Try to connect to emulator
     if adb.connect():
         status['emulator_connected'] = True
     else:
-        status['message'] = "模拟器未连接。请启动Android模拟器。"
+        status['message'] = (
+            "模拟器未连接。请确保:\n"
+            "1. 模拟器已完全启动（等待2分钟）\n"
+            "2. 模拟器显示桌面\n"
+            "3. 再次点击检查环境"
+        )
         return status
     
     # Check Douyin

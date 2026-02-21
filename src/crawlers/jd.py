@@ -44,41 +44,15 @@ class JDCrawler(BaseCrawler):
         
         self._playwright = await async_playwright().start()
         
-        import os
-        
-        playwright_user_data = os.path.expanduser('~/.crawler_chrome_profile')
+        # Use browser helper for smart browser selection
+        from ..utils.browser_helper import create_browser_context
         
         try:
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                playwright_user_data,
-                headless=headless,
-                channel='chrome',
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-CN',
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                ],
+            self._context, self._page, self._browser = await create_browser_context(
+                self._playwright, headless=headless
             )
-            self._browser = None
-            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-            
         except Exception as e:
-            print(f"无法使用Chrome，回退到Chromium: {e}")
-            self._browser = await self._playwright.chromium.launch(
-                headless=headless,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                ]
-            )
-            self._context = await self._browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                locale='zh-CN',
-            )
-            self._page = await self._context.new_page()
+            raise RuntimeError(f"启动浏览器失败: {e}")
         
         await self._page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});

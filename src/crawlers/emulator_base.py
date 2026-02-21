@@ -239,11 +239,54 @@ KUAISHOU_PACKAGE = "com.smile.gifmaker"
 
 def check_adb_installed() -> bool:
     """Check if ADB is installed and accessible"""
+    # First try system ADB
     try:
-        result = subprocess.run(['adb', 'version'], capture_output=True, text=True)
-        return result.returncode == 0
-    except FileNotFoundError:
-        return False
+        result = subprocess.run(['adb', 'version'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    
+    # Try to find emulator-specific ADB
+    adb_path = find_any_adb()
+    if adb_path:
+        return True
+    
+    return False
+
+
+def find_any_adb() -> Optional[str]:
+    """Find any available ADB executable"""
+    # All possible ADB paths
+    all_paths = [
+        # MuMu Player 12 (newest)
+        r"C:\Program Files\Netease\MuMu Player 12\shell\adb.exe",
+        r"C:\Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe",
+        r"C:\Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
+        # MuMu older versions
+        r"C:\Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        r"C:\Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        r"C:\Program Files\Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+        # LDPlayer
+        r"C:\LDPlayer\LDPlayer9\adb.exe",
+        r"C:\LDPlayer\LDPlayer4.0\adb.exe",
+        r"C:\leidian\LDPlayer9\adb.exe",
+        r"C:\leidian\LDPlayer4.0\adb.exe",
+        # NoxPlayer
+        r"C:\Program Files\Nox\bin\adb.exe",
+        r"C:\Program Files (x86)\Nox\bin\nox_adb.exe",
+        # BlueStacks
+        r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe",
+        # Android SDK (if installed)
+        os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
+        os.path.expandvars(r"%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe"),
+    ]
+    
+    for path in all_paths:
+        if os.path.exists(path):
+            return path
+    
+    return None
 
 
 def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
@@ -253,11 +296,15 @@ def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
             r"C:\LDPlayer\LDPlayer9\adb.exe",
             r"C:\LDPlayer\LDPlayer4.0\adb.exe",
             r"C:\leidian\LDPlayer9\adb.exe",
+            r"C:\leidian\LDPlayer4.0\adb.exe",
         ],
         EmulatorType.MUMU: [
             r"C:\Program Files\Netease\MuMu Player 12\shell\adb.exe",
+            r"C:\Program Files\Netease\MuMuPlayer-12.0\shell\adb.exe",
+            r"C:\Program Files (x86)\Netease\MuMu Player 12\shell\adb.exe",
             r"C:\Program Files\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
             r"C:\Program Files (x86)\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
+            r"C:\Program Files\Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
         ],
         EmulatorType.NOXPLAYER: [
             r"C:\Program Files\Nox\bin\adb.exe",
@@ -272,7 +319,8 @@ def get_emulator_adb_path(emulator_type: EmulatorType) -> Optional[str]:
         if os.path.exists(path):
             return path
     
-    return None
+    # If specific emulator ADB not found, try any available ADB
+    return find_any_adb()
 
 
 def detect_running_emulator() -> Optional[EmulatorType]:

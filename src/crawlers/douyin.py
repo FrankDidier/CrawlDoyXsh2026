@@ -62,7 +62,7 @@ class DouyinCrawler(BaseCrawler):
         self._playwright = None
     
     async def _init_browser(self, headless: bool = False):
-        """Initialize browser - uses system Chrome with existing login"""
+        """Initialize browser - uses system Chrome/Edge with fallback"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
         
@@ -70,53 +70,12 @@ class DouyinCrawler(BaseCrawler):
         
         self._playwright = await async_playwright().start()
         
-        # Try to use system Chrome with existing profile for logged-in session
-        import os
-        import sys
+        # Use browser helper for smart browser selection
+        from ..utils.browser_helper import create_browser_context
         
-        # Get Chrome user data directory based on OS
-        if sys.platform == 'darwin':  # macOS
-            chrome_user_data = os.path.expanduser('~/Library/Application Support/Google/Chrome')
-        elif sys.platform == 'win32':  # Windows
-            chrome_user_data = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data')
-        else:  # Linux
-            chrome_user_data = os.path.expanduser('~/.config/google-chrome')
-        
-        # Use persistent context to share Chrome login state
         try:
-            # Create a copy directory for playwright to avoid conflicts with running Chrome
-            playwright_user_data = os.path.expanduser('~/.crawler_chrome_profile')
-            
-            self._context = await self._playwright.chromium.launch_persistent_context(
-                playwright_user_data,
-                headless=headless,
-                channel='chrome',  # Use installed Chrome instead of Chromium
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-CN',
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                ],
-            )
-            self._browser = None  # persistent_context doesn't use separate browser
-            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-            
-        except Exception as e:
-            print(f"无法使用Chrome，回退到Chromium: {e}")
-            # Fallback to regular Chromium if Chrome not available
-            self._browser = await self._playwright.chromium.launch(
-                headless=headless,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                ]
-            )
-            self._context = await self._browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                locale='zh-CN',
+            self._context, self._page, self._browser = await create_browser_context(
+                self._playwright, headless=headless
             )
             self._page = await self._context.new_page()
         
