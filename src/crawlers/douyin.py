@@ -73,11 +73,9 @@ class DouyinCrawler(BaseCrawler):
         # Use browser helper for smart browser selection
         from ..utils.browser_helper import create_browser_context
         
-        try:
-            self._context, self._page, self._browser = await create_browser_context(
-                self._playwright, headless=headless
-            )
-            self._page = await self._context.new_page()
+        self._context, self._page, self._browser = await create_browser_context(
+            self._playwright, headless=headless
+        )
         
         # Additional anti-detection
         await self._page.add_init_script("""
