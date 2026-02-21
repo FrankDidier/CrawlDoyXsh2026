@@ -110,29 +110,50 @@ class TaobaoCrawler(BaseCrawler):
             TaobaoCrawler._shared_playwright = None
     
     def _clean_store_name(self, name: str) -> str:
-        """Clean store name - remove prefixes like "几年老店", "天猫", etc."""
+        """Clean store name - remove prefixes like "几年老店", "天猫", extra labels, etc."""
         if not name:
             return ""
         
         name = name.strip()
         
-        # Remove common prefixes
-        prefixes_to_remove = [
+        # Split by newlines and take the last meaningful part (usually the actual store name)
+        lines = [l.strip() for l in name.split('\n') if l.strip()]
+        if len(lines) > 1:
+            # Filter out labels like "回头客1万", "皇冠", etc.
+            for line in reversed(lines):
+                if not re.match(r'^(回头客|皇冠|钻石|海钻|金冠|蓝冠|红冠|好评|销量|月销|年销|\d+万|\d+人)', line):
+                    if len(line) > 2 and '店' in line or '旗舰' in line or '专卖' in line:
+                        name = line
+                        break
+            else:
+                # If no good match, take last non-numeric line
+                for line in reversed(lines):
+                    if not line.replace('万', '').replace('人', '').isdigit():
+                        name = line
+                        break
+        
+        # Remove common prefixes/suffixes
+        patterns_to_remove = [
             r'^\d+年老店\s*',          # "5年老店 "
             r'^天猫\s*',               # "天猫 "
             r'^淘宝店铺\s*',           # "淘宝店铺 "
             r'^企业店铺\s*',           # "企业店铺 "
             r'^个人店铺\s*',           # "个人店铺 "
             r'^\[.*?\]\s*',            # "[标签] "
+            r'^回头客\d+[万人]*\s*',   # "回头客1万 "
+            r'^皇冠\s*',               # "皇冠 "
+            r'^钻石\s*',               # "钻石 "
+            r'^海钻\s*',               # "海钻 "
+            r'^金冠\s*',               # "金冠 "
         ]
         
-        for pattern in prefixes_to_remove:
+        for pattern in patterns_to_remove:
             name = re.sub(pattern, '', name, flags=re.IGNORECASE)
         
         return name.strip()
     
     def _normalize_store_url(self, url: str) -> str:
-        """Normalize store URL to clean format like: https://shop123456.taobao.com/"""
+        """Normalize store URL - keep it short but recognizable"""
         if not url:
             return ""
         
@@ -140,34 +161,42 @@ class TaobaoCrawler(BaseCrawler):
         if url.startswith('//'):
             url = 'https:' + url
         
-        # Extract shop ID from various URL formats
-        
         # Format 1: https://shop123456.taobao.com/...
         match = re.search(r'shop(\d+)\.taobao\.com', url)
         if match:
             return f"https://shop{match.group(1)}.taobao.com/"
         
-        # Format 2: https://store.taobao.com/shop/view_shop.htm?user_number_id=123456
+        # Format 2: store.taobao.com/shop/view_shop.htm?appUid=XXX
+        # Keep the full URL but clean it up
+        if 'store.taobao.com' in url and 'appUid=' in url:
+            # Extract appUid parameter and keep it simple
+            match = re.search(r'appUid=([a-zA-Z0-9]+)', url)
+            if match:
+                return f"https://store.taobao.com/shop/view_shop.htm?appUid={match.group(1)}"
+        
+        # Format 3: store.taobao.com with user_number_id
         match = re.search(r'user_number_id=(\d+)', url)
         if match:
             return f"https://shop{match.group(1)}.taobao.com/"
         
-        # Format 3: Look for any numeric ID in URL that could be shop ID
-        match = re.search(r'[=/](\d{6,12})[&/\?]?', url)
-        if match:
-            shop_id = match.group(1)
-            return f"https://shop{shop_id}.taobao.com/"
-        
-        # Format 4: tmall.com store - extract shop ID
+        # Format 4: tmall.com store
         if 'tmall.com' in url:
-            match = re.search(r'(\w+)\.tmall\.com', url)
+            # Extract store name from URL
+            match = re.search(r'//([a-zA-Z0-9]+)\.tmall\.com', url)
             if match:
                 return f"https://{match.group(1)}.tmall.com/"
+            # Or keep the view_shop format
+            if 'appUid=' in url:
+                match = re.search(r'appUid=([a-zA-Z0-9]+)', url)
+                if match:
+                    return f"https://store.taobao.com/shop/view_shop.htm?appUid={match.group(1)}"
         
-        # Can't extract shop ID, return as-is but cleaned
+        # Clean up any URL to remove extra parameters
         parsed = urlparse(url)
-        if parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}/"
+        if parsed.netloc and ('taobao' in parsed.netloc or 'tmall' in parsed.netloc):
+            # Keep scheme and netloc, minimal path
+            if 'shop' in parsed.path or 'view_shop' in parsed.path:
+                return url.split('&spm')[0].split('&scm')[0]  # Remove tracking params
         
         return url
     
@@ -317,6 +346,7 @@ class TaobaoCrawler(BaseCrawler):
     async def _extract_stores_from_page(self, limit: int, seen_stores: set) -> int:
         """Extract stores from current page"""
         count = 0
+        seen_urls = set()  # Track unique URLs
         
         # Find all items with store info - try multiple selectors
         selectors = [
@@ -348,25 +378,46 @@ class TaobaoCrawler(BaseCrawler):
                 store_name = ""
                 store_url = ""
                 
-                # Method 1: Look for shop link
-                for link_sel in ['a[href*="shop"]', 'a[href*="store.taobao"]', '[class*="shop"] a']:
+                # Method 1: Look for shop link directly with specific patterns
+                shop_link_selectors = [
+                    'a[href*="store.taobao.com/shop"]',
+                    'a[href*="shop"][href*=".taobao.com"]',
+                    'a[href*=".tmall.com"]:not([href*="detail.tmall.com"])',
+                    '[class*="shop"] a[href*="store.taobao"]',
+                    '[class*="shopName"] a[href]',
+                ]
+                
+                for link_sel in shop_link_selectors:
                     try:
-                        link = await item.query_selector(link_sel)
-                        if link:
-                            store_url = await link.get_attribute('href') or ""
-                            store_name = await link.inner_text() or ""
-                            if store_name:
+                        links = await item.query_selector_all(link_sel)
+                        for link in links:
+                            href = await link.get_attribute('href') or ""
+                            # Skip product detail pages
+                            if 'detail.tmall.com' in href or 'item.htm' in href:
+                                continue
+                            if href and ('store.taobao' in href or 'shop' in href.lower()):
+                                store_url = href
+                                text = await link.inner_text()
+                                if text:
+                                    store_name = text
                                 break
+                        if store_url:
+                            break
                     except:
                         continue
                 
-                # Method 2: Look for shop name element
+                # Method 2: Look for shop name element if not found
                 if not store_name:
                     for name_sel in ['[class*="shopName"]', '[class*="shop-name"]', '[class*="store"]']:
                         try:
                             elem = await item.query_selector(name_sel)
                             if elem:
                                 store_name = await elem.inner_text() or ""
+                                # Also try to get the link from parent or sibling
+                                if not store_url:
+                                    parent_link = await elem.query_selector('a[href]')
+                                    if parent_link:
+                                        store_url = await parent_link.get_attribute('href') or ""
                                 if store_name:
                                     break
                         except:
@@ -381,13 +432,19 @@ class TaobaoCrawler(BaseCrawler):
                 if not store_name or store_name in seen_stores:
                     continue
                 
-                seen_stores.add(store_name)
-                
                 # Normalize store URL to clean format
                 store_url = self._normalize_store_url(store_url)
                 
-                if not store_url or 'shop' not in store_url.lower():
-                    continue  # Skip if URL doesn't look like a shop URL
+                # Skip if URL is empty, doesn't look like a shop, or is duplicate
+                if not store_url or ('shop' not in store_url.lower() and 'tmall' not in store_url.lower()):
+                    continue
+                
+                # Skip duplicate URLs
+                if store_url in seen_urls:
+                    continue
+                
+                seen_stores.add(store_name)
+                seen_urls.add(store_url)
                 
                 # Create result
                 share_text = f"【淘宝店铺】{store_name} {store_url}"
