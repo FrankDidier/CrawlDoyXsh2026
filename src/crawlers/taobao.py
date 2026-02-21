@@ -344,107 +344,59 @@ class TaobaoCrawler(BaseCrawler):
                 await asyncio.sleep(3)
     
     async def _extract_stores_from_page(self, limit: int, seen_stores: set) -> int:
-        """Extract stores from current page"""
+        """Extract stores from current page - directly find all shop links"""
         count = 0
         seen_urls = set()  # Track unique URLs
         
-        # Find all items with store info - try multiple selectors
-        selectors = [
-            '.Card--doubleCardWrapper--L2XFE73',
-            '[class*="Card--"]',
-            '[class*="shopName"]',
-            '.m-itemlist .item',
-            '[data-nid]',
-        ]
+        # Invalid store names to filter out
+        invalid_names = {
+            '开店', '阿里旺旺', '淘宝', '天猫', '登录', '注册', '购物车',
+            '我的淘宝', '收藏夹', '客服', '帮助', '首页', '分类', '搜索',
+            '免费开店', '淘宝开店', '天猫开店', '开直播店', '更多',
+            '进店逛逛', '进店', '逛逛', '查看', '详情',
+        }
         
-        items = []
-        for selector in selectors:
-            try:
-                items = await self._page.query_selector_all(selector)
-                if items and len(items) > 0:
-                    break
-            except:
-                continue
+        # Method 1: Directly find ALL shop links on the page (most reliable)
+        # This catches stores that card-based methods might miss
+        all_shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
         
-        if not items:
-            return 0
+        print(f"Found {len(all_shop_links)} store.taobao links on page")
         
-        for item in items:
+        for link in all_shop_links:
             if count >= limit or self._cancelled:
                 break
             
             try:
-                # Try multiple methods to find store info
-                store_name = ""
-                store_url = ""
-                
-                # Method 1: Look for shop link directly with specific patterns
-                shop_link_selectors = [
-                    'a[href*="store.taobao.com/shop"]',
-                    'a[href*="shop"][href*=".taobao.com"]',
-                    'a[href*=".tmall.com"]:not([href*="detail.tmall.com"])',
-                    '[class*="shop"] a[href*="store.taobao"]',
-                    '[class*="shopName"] a[href]',
-                ]
-                
-                for link_sel in shop_link_selectors:
-                    try:
-                        links = await item.query_selector_all(link_sel)
-                        for link in links:
-                            href = await link.get_attribute('href') or ""
-                            # Skip product detail pages
-                            if 'detail.tmall.com' in href or 'item.htm' in href:
-                                continue
-                            if href and ('store.taobao' in href or 'shop' in href.lower()):
-                                store_url = href
-                                text = await link.inner_text()
-                                if text:
-                                    store_name = text
-                                break
-                        if store_url:
-                            break
-                    except:
-                        continue
-                
-                # Method 2: Look for shop name element if not found
-                if not store_name:
-                    for name_sel in ['[class*="shopName"]', '[class*="shop-name"]', '[class*="store"]']:
-                        try:
-                            elem = await item.query_selector(name_sel)
-                            if elem:
-                                store_name = await elem.inner_text() or ""
-                                # Also try to get the link from parent or sibling
-                                if not store_url:
-                                    parent_link = await elem.query_selector('a[href]')
-                                    if parent_link:
-                                        store_url = await parent_link.get_attribute('href') or ""
-                                if store_name:
-                                    break
-                        except:
-                            continue
-                
-                if not store_name:
+                href = await link.get_attribute('href') or ""
+                if not href or 'store.taobao.com/shop' not in href:
                     continue
                 
-                # Clean store name
+                # Get store name from link text
+                store_name = await link.inner_text() or ""
                 store_name = self._clean_store_name(store_name)
                 
-                if not store_name or store_name in seen_stores:
+                # Filter invalid names
+                if not store_name or len(store_name) < 2:
+                    continue
+                if store_name in invalid_names:
                     continue
                 
-                # Normalize store URL to clean format
-                store_url = self._normalize_store_url(store_url)
+                # Normalize URL
+                store_url = self._normalize_store_url(href)
                 
-                # Skip if URL is empty, doesn't look like a shop, or is duplicate
-                if not store_url or ('shop' not in store_url.lower() and 'tmall' not in store_url.lower()):
+                if not store_url:
                     continue
                 
-                # Skip duplicate URLs
+                # Skip duplicates (by URL, more reliable than name)
                 if store_url in seen_urls:
                     continue
                 
-                seen_stores.add(store_name)
+                # Also skip if name already seen (handles tmall vs taobao same store)
+                if store_name in seen_stores:
+                    continue
+                
                 seen_urls.add(store_url)
+                seen_stores.add(store_name)
                 
                 # Create result
                 share_text = f"【淘宝店铺】{store_name} {store_url}"
@@ -464,21 +416,128 @@ class TaobaoCrawler(BaseCrawler):
                 count += 1
                 
             except Exception as e:
-                print(f"提取店铺信息失败: {e}")
+                print(f"提取店铺链接失败: {e}")
                 continue
         
+        # Method 2: Also check for tmall store links if not enough results
+        if count < limit:
+            tmall_links = await self._page.query_selector_all('a[href*=".tmall.com"]')
+            print(f"Found {len(tmall_links)} tmall links on page")
+            
+            # Invalid store names to filter out
+            invalid_names = {
+                '开店', '阿里旺旺', '淘宝', '天猫', '登录', '注册', '购物车',
+                '我的淘宝', '收藏夹', '客服', '帮助', '首页', '分类', '搜索',
+                '免费开店', '淘宝开店', '天猫开店', '开直播店', '更多',
+            }
+            
+            for link in tmall_links:
+                if count >= limit or self._cancelled:
+                    break
+                
+                try:
+                    href = await link.get_attribute('href') or ""
+                    
+                    # Skip non-store links
+                    if 'detail.tmall.com' in href or 'item.htm' in href or 'item.taobao' in href:
+                        continue
+                    if 'ishop.taobao' in href or 'zhaoshang.tmall' in href:
+                        continue
+                    if 'login' in href.lower() or 'member' in href.lower():
+                        continue
+                    
+                    # Only accept store/shop links
+                    if not any(x in href for x in ['store.taobao', '.tmall.com/']):
+                        continue
+                    
+                    # Get store name
+                    store_name = await link.inner_text() or ""
+                    store_name = self._clean_store_name(store_name)
+                    
+                    # Filter invalid names
+                    if not store_name or len(store_name) < 2:
+                        continue
+                    if store_name in invalid_names:
+                        continue
+                    if not any(c.isalnum() for c in store_name):
+                        continue
+                    
+                    # Must look like a store name (usually contains these)
+                    if not any(x in store_name for x in ['店', '旗舰', '专卖', '官方', '专营']):
+                        # If doesn't have store keywords, must be at least 4 chars
+                        if len(store_name) < 4:
+                            continue
+                    
+                    # Normalize URL
+                    store_url = self._normalize_store_url(href)
+                    
+                    if not store_url or store_url in seen_urls:
+                        continue
+                    
+                    if store_name in seen_stores:
+                        continue
+                    
+                    seen_urls.add(store_url)
+                    seen_stores.add(store_name)
+                    
+                    share_text = f"【天猫店铺】{store_name} {store_url}"
+                    
+                    result = CrawlResult(
+                        platform=self.platform,
+                        content_type=ContentType.STORE,
+                        url=store_url,
+                        share_text=share_text,
+                        title="",
+                        account_id="",
+                        account_name="",
+                        store_name=store_name,
+                    )
+                    
+                    self._add_result(result)
+                    count += 1
+                    
+                except Exception as e:
+                    continue
+        
+        print(f"Extracted {count} stores from this page")
         return count
     
     async def _scroll_page(self):
-        """Scroll page to load more content"""
-        # Scroll down multiple times to load all lazy-loaded content
-        for _ in range(5):
-            await self._page.evaluate('window.scrollBy(0, 800)')
-            await asyncio.sleep(0.8)
+        """Scroll page to load ALL content (49 items per page)"""
+        # Get initial count of shop links
+        prev_count = 0
+        max_scrolls = 15  # Taobao has ~49 items per page, need more scrolling
         
-        # Scroll back to top
-        await self._page.evaluate('window.scrollTo(0, 0)')
+        for i in range(max_scrolls):
+            # Scroll down
+            await self._page.evaluate('window.scrollBy(0, 600)')
+            await asyncio.sleep(0.5)
+            
+            # Check if new content loaded
+            shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
+            current_count = len(shop_links)
+            
+            if current_count == prev_count and i > 5:
+                # No new content after several scrolls, probably loaded all
+                break
+            
+            prev_count = current_count
+        
+        # Scroll to very bottom to trigger any remaining lazy loads
+        await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+        await asyncio.sleep(1)
+        
+        # One more check
+        await self._page.evaluate('window.scrollBy(0, 500)')
         await asyncio.sleep(0.5)
+        
+        # Scroll back to top for consistent behavior
+        await self._page.evaluate('window.scrollTo(0, 0)')
+        await asyncio.sleep(0.3)
+        
+        # Final count
+        final_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
+        print(f"After scrolling: {len(final_links)} shop links visible")
     
     async def _go_to_next_page(self) -> bool:
         """Go to next page, return True if successful"""
