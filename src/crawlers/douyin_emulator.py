@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from .base import CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
 from .emulator_base import (
     ADBController, EmulatorConfig, EmulatorType,
-    DOUYIN_PACKAGE, check_adb_installed, get_emulator_adb_path
+    DOUYIN_PACKAGE, check_adb_installed, get_emulator_adb_path, find_any_adb
 )
 
 
@@ -97,26 +97,41 @@ class DouyinEmulatorCrawler:
         """Connect to Android emulator"""
         self._update_progress(message="正在连接模拟器...")
         
-        # Check ADB
-        if not check_adb_installed():
-            # Try emulator-specific ADB
-            adb_path = get_emulator_adb_path(self.config.emulator_type)
-            if not adb_path:
-                self._update_progress(
-                    status=CrawlStatus.ERROR,
-                    message="❌ 未找到ADB！请确保模拟器已安装。"
-                )
-                return False
+        # Find ADB path - prioritize emulator-specific ADB
+        adb_path = get_emulator_adb_path(self.config.emulator_type)
+        if not adb_path:
+            adb_path = find_any_adb()
+        if not adb_path and not check_adb_installed():
+            self._update_progress(
+                status=CrawlStatus.ERROR,
+                message="❌ 未找到ADB！请确保模拟器已安装。"
+            )
+            return False
         
-        # Create ADB controller
+        # Create ADB controller with found path
         emu_config = EmulatorConfig(emulator_type=self.config.emulator_type)
+        if adb_path:
+            emu_config.adb_path = adb_path
+            print(f"Using ADB: {adb_path}")
         self.adb = ADBController(emu_config)
         
         # Connect
         if not self.adb.connect():
+            # Get ports info for error message
+            if self.config.emulator_type == EmulatorType.MUMU:
+                ports_msg = "16384, 7555, 16416, 7556"
+            elif self.config.emulator_type == EmulatorType.LDPLAYER:
+                ports_msg = "5555, 5556, 5554"
+            else:
+                ports_msg = "多个端口"
+            
             self._update_progress(
                 status=CrawlStatus.ERROR,
-                message="❌ 无法连接模拟器！请确保模拟器正在运行。"
+                message=f"❌ 无法连接模拟器！\n\n"
+                        f"已尝试端口: {ports_msg}\n\n"
+                        f"请确保:\n"
+                        f"1. 模拟器已完全启动\n"
+                        f"2. MuMu: 设置 → 其他设置 → 开启ADB调试"
             )
             return False
         

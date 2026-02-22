@@ -42,7 +42,7 @@ class TaobaoCrawler(BaseCrawler):
         self._playwright = None
         self._keep_browser_open = True  # Keep browser open after crawl
     
-    async def _init_browser(self, headless: bool = False):
+    async def _init_browser(self, headless: bool = False, browser_type: str = "自动"):
         """Initialize browser with persistent profile to save login"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
@@ -62,7 +62,7 @@ class TaobaoCrawler(BaseCrawler):
                 TaobaoCrawler._shared_context = None
                 TaobaoCrawler._shared_page = None
         
-        self._update_progress(message="正在启动浏览器...")
+        self._update_progress(message=f"正在启动浏览器 ({browser_type})...")
         
         self._playwright = await async_playwright().start()
         TaobaoCrawler._shared_playwright = self._playwright
@@ -72,7 +72,7 @@ class TaobaoCrawler(BaseCrawler):
         
         try:
             self._context, self._page, self._browser = await create_browser_context(
-                self._playwright, headless=headless
+                self._playwright, headless=headless, browser_type=browser_type
             )
             # Save for reuse
             TaobaoCrawler._shared_context = self._context
@@ -201,11 +201,15 @@ class TaobaoCrawler(BaseCrawler):
         return url
     
     async def search(self, keyword: str, content_type: ContentType,
-                     max_results: int = 50, headless: bool = False) -> List[CrawlResult]:
+                     max_results: int = 50, headless: bool = False,
+                     browser_type: str = "自动") -> List[CrawlResult]:
         """
         Search Taobao for stores or products.
         Implements pagination to get all results.
         Keeps browser open for manual operation.
+        
+        Args:
+            browser_type: "Chrome", "Edge", "IE", "360浏览器", "QQ浏览器", or "自动"
         """
         if content_type not in self.supported_types:
             raise ValueError(f"不支持的类型: {content_type}")
@@ -214,7 +218,7 @@ class TaobaoCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            await self._init_browser(headless=False)  # Always visible for Taobao
+            await self._init_browser(headless=False, browser_type=browser_type)  # Always visible for Taobao
             
             # Taobao search URL
             url = f"{self.SEARCH_URL}?q={quote(keyword)}"

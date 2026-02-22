@@ -1,12 +1,24 @@
 """
 Browser helper utilities for Playwright.
 Handles browser installation and fallback to system Chrome.
+Supports multiple browsers: Chrome, Edge, IE, 360, QQ etc.
 """
 
 import os
 import sys
 import subprocess
 from typing import Optional, Tuple
+
+
+# Browser selection mapping
+BROWSER_CHANNELS = {
+    "Chrome": "chrome",
+    "Edge": "msedge",
+    "IE": None,  # IE uses different approach
+    "360浏览器": None,
+    "QQ浏览器": None,
+    "自动": None,
+}
 
 
 def get_chrome_path() -> Optional[str]:
@@ -51,6 +63,78 @@ def get_edge_path() -> Optional[str]:
     for path in paths:
         if os.path.exists(path):
             return path
+    
+    return None
+
+
+def get_ie_path() -> Optional[str]:
+    """Get path to Internet Explorer executable (Windows)"""
+    if sys.platform != 'win32':
+        return None
+    
+    paths = [
+        os.path.expandvars(r'%PROGRAMFILES%\Internet Explorer\iexplore.exe'),
+        os.path.expandvars(r'%PROGRAMFILES(X86)%\Internet Explorer\iexplore.exe'),
+        r'C:\Program Files\Internet Explorer\iexplore.exe',
+    ]
+    
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+
+def get_360_browser_path() -> Optional[str]:
+    """Get path to 360 browser executable (Windows)"""
+    if sys.platform != 'win32':
+        return None
+    
+    paths = [
+        os.path.expandvars(r'%LOCALAPPDATA%\360Chrome\Chrome\Application\360chrome.exe'),
+        os.path.expandvars(r'%PROGRAMFILES%\360\360se6\Application\360se.exe'),
+        os.path.expandvars(r'%PROGRAMFILES(X86)%\360\360se6\Application\360se.exe'),
+        r'C:\Program Files\360\360se6\Application\360se.exe',
+        r'C:\Users\Public\Desktop\360安全浏览器.lnk',
+    ]
+    
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+
+def get_qq_browser_path() -> Optional[str]:
+    """Get path to QQ browser executable (Windows)"""
+    if sys.platform != 'win32':
+        return None
+    
+    paths = [
+        os.path.expandvars(r'%LOCALAPPDATA%\Tencent\QQBrowser\QQBrowser.exe'),
+        os.path.expandvars(r'%PROGRAMFILES%\Tencent\QQBrowser\QQBrowser.exe'),
+        os.path.expandvars(r'%PROGRAMFILES(X86)%\Tencent\QQBrowser\QQBrowser.exe'),
+    ]
+    
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+
+def get_browser_by_name(browser_name: str) -> Optional[str]:
+    """Get browser executable path by name"""
+    browser_map = {
+        "Chrome": get_chrome_path,
+        "Edge": get_edge_path,
+        "IE": get_ie_path,
+        "360浏览器": get_360_browser_path,
+        "QQ浏览器": get_qq_browser_path,
+    }
+    
+    if browser_name in browser_map:
+        return browser_map[browser_name]()
     
     return None
 
@@ -134,67 +218,99 @@ def get_user_data_dir() -> str:
         return os.path.expanduser('~/.crawler_browser_profile')
 
 
-async def create_browser_context(playwright, headless: bool = False):
+async def create_browser_context(playwright, headless: bool = False, browser_type: str = "自动"):
     """
-    Create a browser context with best available browser.
-    Handles fallback from Chrome -> Edge -> Chromium.
+    Create a browser context with specified or best available browser.
     
-    Returns: (context, page) tuple
+    Args:
+        playwright: Playwright instance
+        headless: Run browser in headless mode
+        browser_type: "Chrome", "Edge", "IE", "360浏览器", "QQ浏览器", or "自动"
+    
+    Returns: (context, page, browser) tuple
     """
     user_data_dir = get_user_data_dir()
     os.makedirs(user_data_dir, exist_ok=True)
     
     errors = []
     
-    # Strategy 1: Try Chrome with persistent context
-    chrome_path = get_chrome_path()
-    if chrome_path:
+    # Common launch arguments
+    common_args = [
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+    ]
+    
+    # Determine browser order based on user selection
+    if browser_type == "自动":
+        # Default priority: Chrome -> Edge -> Chromium
+        browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge"), ("Chromium", None)]
+    elif browser_type == "Chrome":
+        browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
+    elif browser_type == "Edge":
+        browsers_to_try = [("Edge", "msedge"), ("Chrome", "chrome")]
+    elif browser_type == "IE":
+        # IE is based on Edge in modern Windows, use Edge IE mode or fallback
+        # Playwright doesn't directly support IE, use Edge with IE compatibility
+        browsers_to_try = [("Edge", "msedge"), ("Chrome", "chrome")]
+        print("注意: IE模式将使用Edge浏览器（IE兼容模式）")
+    elif browser_type in ["360浏览器", "QQ浏览器"]:
+        # These are Chromium-based, try them via executable path
+        browser_path = get_browser_by_name(browser_type)
+        if browser_path:
+            try:
+                context = await playwright.chromium.launch_persistent_context(
+                    user_data_dir + f'_{browser_type}',
+                    headless=headless,
+                    executable_path=browser_path,
+                    viewport={'width': 1920, 'height': 1080},
+                    locale='zh-CN',
+                    args=common_args,
+                )
+                page = context.pages[0] if context.pages else await context.new_page()
+                print(f"使用 {browser_type}")
+                return context, page, None
+            except Exception as e:
+                errors.append(f"{browser_type}: {e}")
+        else:
+            errors.append(f"{browser_type}: 未安装")
+        # Fallback to other browsers
+        browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
+    else:
+        browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
+    
+    # Try browsers in order
+    for name, channel in browsers_to_try:
+        if channel is None:
+            continue
+        
+        # Check if browser exists
+        if name == "Chrome" and not get_chrome_path():
+            continue
+        if name == "Edge" and not get_edge_path():
+            continue
+        
         try:
+            suffix = "" if name == "Chrome" else f"_{name.lower()}"
             context = await playwright.chromium.launch_persistent_context(
-                user_data_dir,
+                user_data_dir + suffix,
                 headless=headless,
-                channel='chrome',
+                channel=channel,
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                ],
+                args=common_args,
             )
             page = context.pages[0] if context.pages else await context.new_page()
+            print(f"使用 {name} 浏览器")
             return context, page, None
         except Exception as e:
-            errors.append(f"Chrome: {e}")
+            errors.append(f"{name}: {e}")
     
-    # Strategy 2: Try Edge (Windows)
-    edge_path = get_edge_path()
-    if edge_path:
-        try:
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir + '_edge',
-                headless=headless,
-                channel='msedge',
-                viewport={'width': 1920, 'height': 1080},
-                locale='zh-CN',
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--no-sandbox',
-                ],
-            )
-            page = context.pages[0] if context.pages else await context.new_page()
-            return context, page, None
-        except Exception as e:
-            errors.append(f"Edge: {e}")
-    
-    # Strategy 3: Try Playwright's bundled Chromium
+    # Last resort: Try Playwright's bundled Chromium
     try:
         browser = await playwright.chromium.launch(
             headless=headless,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-            ]
+            args=common_args
         )
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
@@ -202,6 +318,7 @@ async def create_browser_context(playwright, headless: bool = False):
             locale='zh-CN',
         )
         page = await context.new_page()
+        print("使用内置 Chromium 浏览器")
         return context, page, browser
     except Exception as e:
         errors.append(f"Chromium: {e}")

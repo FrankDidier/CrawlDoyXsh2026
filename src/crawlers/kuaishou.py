@@ -38,12 +38,12 @@ class KuaishouCrawler(BaseCrawler):
         self._page: Optional[Page] = None
         self._playwright = None
     
-    async def _init_browser(self, headless: bool = False):
+    async def _init_browser(self, headless: bool = False, browser_type: str = "自动"):
         """Initialize browser"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
         
-        self._update_progress(message="正在启动浏览器...")
+        self._update_progress(message=f"正在启动浏览器 ({browser_type})...")
         
         self._playwright = await async_playwright().start()
         
@@ -52,7 +52,7 @@ class KuaishouCrawler(BaseCrawler):
         
         try:
             self._context, self._page, self._browser = await create_browser_context(
-                self._playwright, headless=headless
+                self._playwright, headless=headless, browser_type=browser_type
             )
         except Exception as e:
             raise RuntimeError(f"启动浏览器失败: {e}")
@@ -75,7 +75,8 @@ class KuaishouCrawler(BaseCrawler):
             self._playwright = None
     
     async def search(self, keyword: str, content_type: ContentType,
-                     max_results: int = 50, headless: bool = False) -> List[CrawlResult]:
+                     max_results: int = 50, headless: bool = False,
+                     browser_type: str = "自动") -> List[CrawlResult]:
         """
         Search Kuaishou for keyword and crawl results.
         """
@@ -86,7 +87,7 @@ class KuaishouCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            await self._init_browser(headless=False)
+            await self._init_browser(headless=False, browser_type=browser_type)
             
             # Use kuaishou.com search with keyword
             if content_type == ContentType.LIVE:

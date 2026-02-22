@@ -31,6 +31,7 @@ from ..utils.logger import logger
 try:
     from ..crawlers.emulator_base import EmulatorType, detect_running_emulator
     from ..crawlers.douyin_emulator import DouyinEmulatorCrawler, check_emulator_ready
+    from ..crawlers.kuaishou_emulator import KuaishouEmulatorCrawler, check_kuaishou_emulator_ready
     HAS_EMULATOR_SUPPORT = True
 except ImportError:
     HAS_EMULATOR_SUPPORT = False
@@ -44,13 +45,14 @@ class CrawlerWorker(QThread):
     error = Signal(str)
     
     def __init__(self, crawler, keyword: str, content_type: ContentType, 
-                 max_results: int, headless: bool):
+                 max_results: int, headless: bool, browser_type: str = "自动"):
         super().__init__()
         self.crawler = crawler
         self.keyword = keyword
         self.content_type = content_type
         self.max_results = max_results
         self.headless = headless
+        self.browser_type = browser_type
     
     def run(self):
         try:
@@ -71,7 +73,8 @@ class CrawlerWorker(QThread):
                         self.keyword, 
                         self.content_type, 
                         self.max_results,
-                        self.headless
+                        self.headless,
+                        self.browser_type
                     )
                 )
             finally:
@@ -181,14 +184,29 @@ class MainWindow(QMainWindow):
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
         search_layout.addWidget(self.mode_combo, 0, 1)
         
-        # Check emulator button
+        # Browser selection (for web mode)
+        self.browser_label = QLabel("浏览器:")
+        search_layout.addWidget(self.browser_label, 0, 2)
+        
+        self.browser_combo = QComboBox()
+        self.browser_combo.addItems(["Chrome", "Edge", "IE", "360浏览器", "QQ浏览器", "自动"])
+        self.browser_combo.setCurrentText("自动")  # Default to auto
+        self.browser_combo.setToolTip(
+            "选择用于抓取的浏览器\n"
+            "自动: 优先使用Chrome, 然后Edge, 最后内置浏览器\n"
+            "IE: 淘宝更稳定\n"
+            "建议: 使用不同浏览器可避免验证码"
+        )
+        search_layout.addWidget(self.browser_combo, 0, 3)
+        
+        # Check emulator button (hidden by default)
         self.check_emu_btn = QPushButton("🔍 检查环境")
         self.check_emu_btn.setToolTip("检查模拟器是否已安装并连接")
         self.check_emu_btn.clicked.connect(self.check_emulator_environment)
-        self.check_emu_btn.setVisible(False)  # Hidden by default
+        self.check_emu_btn.setVisible(False)
         search_layout.addWidget(self.check_emu_btn, 0, 2)
         
-        # Emulator type selection
+        # Emulator type selection (hidden by default)
         self.emu_type_label = QLabel("模拟器:")
         self.emu_type_label.setVisible(False)
         search_layout.addWidget(self.emu_type_label, 0, 3)
@@ -339,6 +357,10 @@ class MainWindow(QMainWindow):
         self.emu_type_label.setVisible(is_emulator)
         self.emu_type_combo.setVisible(is_emulator)
         
+        # Show/hide browser selector (only for web mode)
+        self.browser_label.setVisible(not is_emulator)
+        self.browser_combo.setVisible(not is_emulator)
+        
         # Hide headless checkbox for emulator mode (not applicable)
         self.headless_check.setVisible(not is_emulator)
         
@@ -455,12 +477,9 @@ class MainWindow(QMainWindow):
                 config = DouyinEmulatorConfig(emulator_type=emu_type)
                 self.crawler = DouyinEmulatorCrawler(config)
             elif platform == "快手":
-                QMessageBox.information(
-                    self, "提示",
-                    "快手APP模拟器功能正在开发中...\n\n"
-                    "请先使用网页版或等待更新。"
-                )
-                return
+                from ..crawlers.kuaishou_emulator import KuaishouEmulatorCrawler, KuaishouEmulatorConfig
+                config = KuaishouEmulatorConfig(emulator_type=emu_type)
+                self.crawler = KuaishouEmulatorCrawler(config)
             else:
                 QMessageBox.warning(
                     self, "提示",
@@ -479,6 +498,7 @@ class MainWindow(QMainWindow):
         else:
             # Web mode
             headless = self.headless_check.isChecked()
+            browser_type = self.browser_combo.currentText()
             
             # Create appropriate crawler
             if platform == "抖音":
@@ -501,7 +521,7 @@ class MainWindow(QMainWindow):
             
             # Start worker thread
             self.worker = CrawlerWorker(
-                self.crawler, keyword, content_type, max_results, headless
+                self.crawler, keyword, content_type, max_results, headless, browser_type
             )
         
         # Connect signals

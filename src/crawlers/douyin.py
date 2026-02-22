@@ -62,12 +62,12 @@ class DouyinCrawler(BaseCrawler):
         self._page: Optional[Page] = None
         self._playwright = None
     
-    async def _init_browser(self, headless: bool = False):
+    async def _init_browser(self, headless: bool = False, browser_type: str = "自动"):
         """Initialize browser - uses system Chrome/Edge with fallback"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
         
-        self._update_progress(message="正在启动浏览器...")
+        self._update_progress(message=f"正在启动浏览器 ({browser_type})...")
         
         self._playwright = await async_playwright().start()
         
@@ -75,7 +75,7 @@ class DouyinCrawler(BaseCrawler):
         from ..utils.browser_helper import create_browser_context
         
         self._context, self._page, self._browser = await create_browser_context(
-            self._playwright, headless=headless
+            self._playwright, headless=headless, browser_type=browser_type
         )
         
         # Additional anti-detection
@@ -235,7 +235,8 @@ class DouyinCrawler(BaseCrawler):
         return login_required
     
     async def search(self, keyword: str, content_type: ContentType,
-                     max_results: int = 50, headless: bool = False) -> List[CrawlResult]:
+                     max_results: int = 50, headless: bool = False,
+                     browser_type: str = "自动") -> List[CrawlResult]:
         """
         Search Douyin for keyword and crawl results.
         
@@ -244,6 +245,7 @@ class DouyinCrawler(BaseCrawler):
             content_type: LIVE or VIDEO
             max_results: Maximum results to crawl
             headless: Run browser in headless mode (False recommended for CAPTCHA)
+            browser_type: "Chrome", "Edge", "IE", "360浏览器", "QQ浏览器", or "自动"
             
         Returns:
             List of CrawlResult
@@ -256,7 +258,7 @@ class DouyinCrawler(BaseCrawler):
         
         try:
             # Always use non-headless for CAPTCHA handling
-            await self._init_browser(headless=False)
+            await self._init_browser(headless=False, browser_type=browser_type)
             
             # Both live and video use the main douyin.com search with different type parameter
             search_type = self.TYPE_MAP[content_type]

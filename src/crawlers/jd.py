@@ -41,7 +41,7 @@ class JDCrawler(BaseCrawler):
         self._playwright = None
         self._keep_browser_open = True
     
-    async def _init_browser(self, headless: bool = False):
+    async def _init_browser(self, headless: bool = False, browser_type: str = "自动"):
         """Initialize browser - reuse existing if available"""
         if not HAS_PLAYWRIGHT:
             raise RuntimeError("Playwright未安装。请运行: pip install playwright && playwright install chromium")
@@ -59,7 +59,7 @@ class JDCrawler(BaseCrawler):
                 JDCrawler._shared_context = None
                 JDCrawler._shared_page = None
         
-        self._update_progress(message="正在启动浏览器...")
+        self._update_progress(message=f"正在启动浏览器 ({browser_type})...")
         
         self._playwright = await async_playwright().start()
         JDCrawler._shared_playwright = self._playwright
@@ -68,7 +68,7 @@ class JDCrawler(BaseCrawler):
         
         try:
             self._context, self._page, self._browser = await create_browser_context(
-                self._playwright, headless=headless
+                self._playwright, headless=headless, browser_type=browser_type
             )
             JDCrawler._shared_context = self._context
             JDCrawler._shared_page = self._page
@@ -103,7 +103,8 @@ class JDCrawler(BaseCrawler):
             JDCrawler._shared_playwright = None
     
     async def search(self, keyword: str, content_type: ContentType,
-                     max_results: int = 50, headless: bool = False) -> List[CrawlResult]:
+                     max_results: int = 50, headless: bool = False,
+                     browser_type: str = "自动") -> List[CrawlResult]:
         """Search JD for stores or products."""
         if content_type not in self.supported_types:
             raise ValueError(f"不支持的类型: {content_type}")
@@ -112,13 +113,17 @@ class JDCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            await self._init_browser(headless=False)
+            await self._init_browser(headless=False, browser_type=browser_type)
             
             url = f"{self.SEARCH_URL}?keyword={quote(keyword)}"
             self._update_progress(message="正在打开京东搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            await asyncio.sleep(5)
+            
+            # Longer initial wait with randomness to avoid detection
+            import random
+            wait_time = random.uniform(6, 10)
+            await asyncio.sleep(wait_time)
             
             # Check for rate limiting or login
             await self._handle_rate_limit_and_login()
@@ -208,6 +213,7 @@ class JDCrawler(BaseCrawler):
     
     async def _crawl_stores(self, max_results: int):
         """Crawl store info from JD search results"""
+        import random
         self._update_progress(message="正在抓取京东店铺...")
         
         collected = 0
@@ -217,7 +223,8 @@ class JDCrawler(BaseCrawler):
         no_new_results_count = 0
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            await asyncio.sleep(4)  # Longer delay to avoid rate limiting
+            # Random delay between 4-8 seconds to avoid detection
+            await asyncio.sleep(random.uniform(4, 8))
             
             try:
                 items = await self._page.query_selector_all('li.gl-item, .gl-i-wrap, div[data-sku], .J-goods-list .gl-item')

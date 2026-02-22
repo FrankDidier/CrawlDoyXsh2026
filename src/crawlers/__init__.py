@@ -14,6 +14,7 @@ from .jd import JDCrawler
 try:
     from .emulator_base import ADBController, EmulatorConfig, EmulatorType
     from .douyin_emulator import DouyinEmulatorCrawler, check_emulator_ready
+    from .kuaishou_emulator import KuaishouEmulatorCrawler, check_kuaishou_emulator_ready
     HAS_EMULATOR = True
 except ImportError:
     HAS_EMULATOR = False
@@ -27,6 +28,8 @@ __all__ = [
     'TaobaoCrawler',
     'JDCrawler',
     'DouyinEmulatorCrawler',
+    'KuaishouEmulatorCrawler',
     'check_emulator_ready',
+    'check_kuaishou_emulator_ready',
     'HAS_EMULATOR',
 ]
