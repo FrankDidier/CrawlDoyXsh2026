@@ -166,30 +166,22 @@ class TaobaoCrawler(BaseCrawler):
         if match:
             return f"https://shop{match.group(1)}.taobao.com/"
         
-        # Format 2: store.taobao.com/shop/view_shop.htm?appUid=XXX
-        # Keep the full URL but clean it up
-        if 'store.taobao.com' in url and 'appUid=' in url:
-            # Extract appUid parameter and keep it simple
-            match = re.search(r'appUid=([a-zA-Z0-9]+)', url)
-            if match:
-                return f"https://store.taobao.com/shop/view_shop.htm?appUid={match.group(1)}"
+        # Format 2: storename.tmall.com (best format!)
+        match = re.search(r'//([a-zA-Z0-9]+)\.tmall\.com', url)
+        if match and match.group(1) not in ['detail', 'item', 'login', 'pages', 'www']:
+            return f"https://{match.group(1)}.tmall.com/"
         
-        # Format 3: store.taobao.com with user_number_id
+        # Format 3: store.taobao.com with user_number_id -> convert to shop format
         match = re.search(r'user_number_id=(\d+)', url)
         if match:
             return f"https://shop{match.group(1)}.taobao.com/"
         
-        # Format 4: tmall.com store
-        if 'tmall.com' in url:
-            # Extract store name from URL
-            match = re.search(r'//([a-zA-Z0-9]+)\.tmall\.com', url)
+        # Format 4: store.taobao.com/shop/view_shop.htm?appUid=XXX
+        # This is the long format - we'll keep it but clean it up
+        if 'store.taobao.com' in url and 'appUid=' in url:
+            match = re.search(r'appUid=([a-zA-Z0-9]+)', url)
             if match:
-                return f"https://{match.group(1)}.tmall.com/"
-            # Or keep the view_shop format
-            if 'appUid=' in url:
-                match = re.search(r'appUid=([a-zA-Z0-9]+)', url)
-                if match:
-                    return f"https://store.taobao.com/shop/view_shop.htm?appUid={match.group(1)}"
+                return f"https://store.taobao.com/shop/view_shop.htm?appUid={match.group(1)}"
         
         # Clean up any URL to remove extra parameters
         parsed = urlparse(url)
@@ -199,6 +191,33 @@ class TaobaoCrawler(BaseCrawler):
                 return url.split('&spm')[0].split('&scm')[0]  # Remove tracking params
         
         return url
+    
+    async def _get_real_store_url(self, page, store_link_url: str) -> str:
+        """
+        Visit store link and get the final redirected URL.
+        This gets the clean storename.tmall.com format.
+        """
+        try:
+            # Open in new tab
+            new_page = await self._context.new_page()
+            
+            # Navigate with short timeout
+            await new_page.goto(store_link_url, wait_until='domcontentloaded', timeout=10000)
+            await asyncio.sleep(1)
+            
+            # Get final URL after redirect
+            final_url = new_page.url
+            
+            # Close the tab
+            await new_page.close()
+            
+            # Normalize the final URL
+            return self._normalize_store_url(final_url)
+            
+        except Exception as e:
+            print(f"获取真实店铺URL失败: {e}")
+            # Fall back to normalizing the original URL
+            return self._normalize_store_url(store_link_url)
     
     async def search(self, keyword: str, content_type: ContentType,
                      max_results: int = 50, headless: bool = False,
@@ -220,8 +239,9 @@ class TaobaoCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False, browser_type=browser_type)  # Always visible for Taobao
             
-            # Taobao search URL
-            url = f"{self.SEARCH_URL}?q={quote(keyword)}"
+            # Taobao search URL - must include page=1 and tab=all for results to load
+            # Without these parameters, the page may show empty/loading state
+            url = f"{self.SEARCH_URL}?page=1&q={quote(keyword)}&tab=all"
             self._update_progress(message="正在打开淘宝搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
@@ -348,7 +368,7 @@ class TaobaoCrawler(BaseCrawler):
                 await asyncio.sleep(3)
     
     async def _extract_stores_from_page(self, limit: int, seen_stores: set) -> int:
-        """Extract stores from current page - directly find all shop links"""
+        """Extract stores from current page - use multiple selectors for complete extraction"""
         count = 0
         seen_urls = set()  # Track unique URLs
         
@@ -357,14 +377,40 @@ class TaobaoCrawler(BaseCrawler):
             '开店', '阿里旺旺', '淘宝', '天猫', '登录', '注册', '购物车',
             '我的淘宝', '收藏夹', '客服', '帮助', '首页', '分类', '搜索',
             '免费开店', '淘宝开店', '天猫开店', '开直播店', '更多',
-            '进店逛逛', '进店', '逛逛', '查看', '详情',
+            '进店逛逛', '进店', '逛逛', '查看', '详情', '相似', '找相似',
+            '加购', '收藏', '对比', '宝贝', '购买', '立即购买',
         }
         
-        # Method 1: Directly find ALL shop links on the page (most reliable)
-        # This catches stores that card-based methods might miss
-        all_shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
+        # Use multiple selectors to find all store links
+        # Each selector targets different page structures
+        selectors = [
+            'a[href*="store.taobao.com/shop"]',           # Standard taobao store link
+            'a[href*=".taobao.com/shop/view_shop"]',      # View shop format
+            'a[href*="shop"][href*=".taobao.com"]',       # Shop in taobao domain
+            '[class*="shopname"] a',                       # Class contains shopname
+            '[class*="shop-name"] a',                      # Class shop-name
+            '[class*="store-name"] a',                     # Class store-name
+            '[data-spm*="shop"] a',                        # Data attribute with shop
+            '.Card--doubleCard a[href*="taobao.com"]',     # Card structure
+            '.content--content a[href*="shop"]',           # Content structure
+        ]
         
-        print(f"Found {len(all_shop_links)} store.taobao links on page")
+        all_shop_links = []
+        seen_elements = set()  # To avoid processing same element twice
+        
+        for selector in selectors:
+            try:
+                links = await self._page.query_selector_all(selector)
+                for link in links:
+                    # Get unique identifier for element
+                    elem_id = await link.evaluate('el => el.outerHTML.substring(0, 200)')
+                    if elem_id not in seen_elements:
+                        seen_elements.add(elem_id)
+                        all_shop_links.append(link)
+            except:
+                continue
+        
+        print(f"Found {len(all_shop_links)} shop links using multiple selectors")
         
         for link in all_shop_links:
             if count >= limit or self._cancelled:
@@ -508,22 +554,40 @@ class TaobaoCrawler(BaseCrawler):
     
     async def _scroll_page(self):
         """Scroll page to load ALL content (49 items per page)"""
-        # Get initial count of shop links
+        # Multiple selectors to count items
+        item_selectors = [
+            'a[href*="store.taobao.com/shop"]',
+            'a[href*=".tmall.com/"][href*="shop"]',
+            '[class*="Card"]',  # Product cards
+            '.content--content',  # Content items
+        ]
+        
         prev_count = 0
-        max_scrolls = 15  # Taobao has ~49 items per page, need more scrolling
+        max_scrolls = 20  # More scrolls to ensure all 49 items load
+        stable_count = 0  # Track how many times count stayed same
         
         for i in range(max_scrolls):
-            # Scroll down
-            await self._page.evaluate('window.scrollBy(0, 600)')
-            await asyncio.sleep(0.5)
+            # Scroll down with varying amounts
+            scroll_amount = 500 + (i % 3) * 200  # 500, 700, 900, 500, ...
+            await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+            await asyncio.sleep(0.4)
             
-            # Check if new content loaded
-            shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
-            current_count = len(shop_links)
+            # Count items using multiple selectors
+            current_count = 0
+            for selector in item_selectors:
+                try:
+                    items = await self._page.query_selector_all(selector)
+                    current_count = max(current_count, len(items))
+                except:
+                    continue
             
-            if current_count == prev_count and i > 5:
-                # No new content after several scrolls, probably loaded all
-                break
+            if current_count == prev_count:
+                stable_count += 1
+                if stable_count >= 3 and i > 8:
+                    # Count stable for 3 iterations after 8 scrolls
+                    break
+            else:
+                stable_count = 0
             
             prev_count = current_count
         
@@ -531,22 +595,46 @@ class TaobaoCrawler(BaseCrawler):
         await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
         await asyncio.sleep(1)
         
-        # One more check
+        # Scroll up a bit and down again to trigger more lazy loads
+        await self._page.evaluate('window.scrollBy(0, -300)')
+        await asyncio.sleep(0.3)
         await self._page.evaluate('window.scrollBy(0, 500)')
         await asyncio.sleep(0.5)
         
         # Scroll back to top for consistent behavior
         await self._page.evaluate('window.scrollTo(0, 0)')
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
         
         # Final count
-        final_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
-        print(f"After scrolling: {len(final_links)} shop links visible")
+        final_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"], a[href*=".tmall.com/"]')
+        print(f"After scrolling: {len(final_links)} shop/tmall links visible")
     
     async def _go_to_next_page(self) -> bool:
         """Go to next page, return True if successful"""
         try:
-            # Method 1: Find and click "下一页" button
+            # Method 1: Modify URL directly (most reliable)
+            # Current URL format: https://s.taobao.com/search?page=1&q=keyword&tab=all
+            current_url = self._page.url
+            
+            if 'page=' in current_url:
+                match = re.search(r'page=(\d+)', current_url)
+                if match:
+                    current_page = int(match.group(1))
+                    next_page = current_page + 1
+                    new_url = re.sub(r'page=\d+', f'page={next_page}', current_url)
+                    
+                    await self._page.goto(new_url, wait_until='domcontentloaded', timeout=30000)
+                    await asyncio.sleep(3)
+                    
+                    # Check if page actually has content
+                    shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
+                    if len(shop_links) > 0:
+                        return True
+                    else:
+                        print(f"Page {next_page} has no results, stopping")
+                        return False
+            
+            # Method 2: Find and click "下一页" button (fallback)
             next_selectors = [
                 'button:has-text("下一页")',
                 'a:has-text("下一页")',
@@ -567,23 +655,17 @@ class TaobaoCrawler(BaseCrawler):
                 except:
                     continue
             
-            # Method 2: Keyboard navigation
+            # Method 3: Try clicking next page number
             try:
-                await self._page.keyboard.press('End')
-                await asyncio.sleep(1)
-                # Check if there's pagination
-                pagination = await self._page.query_selector('[class*="pagination"]')
-                if pagination:
-                    # Try clicking the next page number
-                    current = await self._page.query_selector('[class*="current"], [class*="active"]')
-                    if current:
-                        current_text = await current.inner_text()
-                        next_num = int(current_text) + 1
-                        next_page = await self._page.query_selector(f'a:has-text("{next_num}")')
-                        if next_page:
-                            await next_page.click()
-                            await asyncio.sleep(3)
-                            return True
+                current = await self._page.query_selector('[class*="current"], [class*="active"]')
+                if current:
+                    current_text = await current.inner_text()
+                    next_num = int(current_text) + 1
+                    next_page = await self._page.query_selector(f'a:has-text("{next_num}")')
+                    if next_page:
+                        await next_page.click()
+                        await asyncio.sleep(3)
+                        return True
             except:
                 pass
             
