@@ -159,6 +159,11 @@ class ADBController:
         """Swipe down to scroll up"""
         self.swipe(540, 600, 540, 600 + distance, 200)
     
+    def press_key(self, keycode: int):
+        """Press a key by keycode (e.g., 66 for Enter, 4 for Back)"""
+        self._run_adb('shell', 'input', 'keyevent', str(keycode))
+        time.sleep(0.3)
+    
     def press_back(self):
         """Press back button"""
         self._run_adb('shell', 'input', 'keyevent', '4')
@@ -168,6 +173,11 @@ class ADBController:
         """Press home button"""
         self._run_adb('shell', 'input', 'keyevent', '3')
         time.sleep(0.5)
+    
+    def press_enter(self):
+        """Press enter/search key"""
+        self._run_adb('shell', 'input', 'keyevent', '66')
+        time.sleep(0.3)
     
     def input_text(self, text: str):
         """Input text (for search etc.)"""

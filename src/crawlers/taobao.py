@@ -360,7 +360,7 @@ class TaobaoCrawler(BaseCrawler):
             
             # Try to go to next page
             if collected < max_results:
-                has_next = await self._go_to_next_page()
+                has_next = await self._go_to_next_page(page_num)
                 if not has_next:
                     self._update_progress(message="已到最后一页")
                     break
@@ -609,30 +609,44 @@ class TaobaoCrawler(BaseCrawler):
         final_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"], a[href*=".tmall.com/"]')
         print(f"After scrolling: {len(final_links)} shop/tmall links visible")
     
-    async def _go_to_next_page(self) -> bool:
+    async def _go_to_next_page(self, current_page_num: int) -> bool:
         """Go to next page, return True if successful"""
         try:
-            # Method 1: Modify URL directly (most reliable)
-            # Current URL format: https://s.taobao.com/search?page=1&q=keyword&tab=all
+            next_page_num = current_page_num + 1
+            
+            # Get base URL and update page parameter
             current_url = self._page.url
             
             if 'page=' in current_url:
-                match = re.search(r'page=(\d+)', current_url)
-                if match:
-                    current_page = int(match.group(1))
-                    next_page = current_page + 1
-                    new_url = re.sub(r'page=\d+', f'page={next_page}', current_url)
-                    
-                    await self._page.goto(new_url, wait_until='domcontentloaded', timeout=30000)
-                    await asyncio.sleep(3)
-                    
-                    # Check if page actually has content
-                    shop_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"]')
-                    if len(shop_links) > 0:
-                        return True
-                    else:
-                        print(f"Page {next_page} has no results, stopping")
-                        return False
+                new_url = re.sub(r'page=\d+', f'page={next_page_num}', current_url)
+            else:
+                if '?' in current_url:
+                    new_url = current_url + f'&page={next_page_num}'
+                else:
+                    new_url = current_url + f'?page={next_page_num}'
+            
+            print(f"翻页: 从第{current_page_num}页到第{next_page_num}页")
+            
+            await self._page.goto(new_url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(4)  # Wait longer for content to load
+            
+            # Scroll to load lazy content
+            await self._page.evaluate('window.scrollBy(0, 500)')
+            await asyncio.sleep(1)
+            
+            # Check if page actually has content (multiple selectors)
+            shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
+            if len(shop_links) > 5:  # At least 5 links to be considered a valid page
+                print(f"第{next_page_num}页加载成功，有{len(shop_links)}个链接")
+                return True
+            else:
+                print(f"第{next_page_num}页只有{len(shop_links)}个链接，可能已到末页")
+                # Try scrolling more to load content
+                await self._scroll_page()
+                shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
+                if len(shop_links) > 5:
+                    return True
+                return False
             
             # Method 2: Find and click "下一页" button (fallback)
             next_selectors = [
@@ -747,7 +761,7 @@ class TaobaoCrawler(BaseCrawler):
             
             # Go to next page
             if collected < max_results:
-                has_next = await self._go_to_next_page()
+                has_next = await self._go_to_next_page(page_num)
                 if not has_next:
                     break
                 page_num += 1
