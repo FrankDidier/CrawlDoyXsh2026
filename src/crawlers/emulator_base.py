@@ -139,25 +139,56 @@ class ADBController:
         success, output = self._run_adb('get-state')
         return success and 'device' in output
     
-    def tap(self, x: int, y: int):
-        """Tap on screen at coordinates"""
+    def get_screen_size(self) -> Tuple[int, int]:
+        """Get screen size (width, height) from emulator"""
+        success, output = self._run_adb('shell', 'wm', 'size')
+        if success and 'Physical size:' in output:
+            try:
+                # Parse "Physical size: 1080x1920"
+                size_str = output.split('Physical size:')[1].strip().split()[0]
+                width, height = size_str.split('x')
+                return int(width), int(height)
+            except:
+                pass
+        # Default to 1080x1920 if can't detect
+        return 1080, 1920
+    
+    def scale_coord(self, x: int, y: int, base_width: int = 1080, base_height: int = 1920) -> Tuple[int, int]:
+        """Scale coordinates from base resolution to actual screen resolution"""
+        actual_width, actual_height = self.get_screen_size()
+        scaled_x = int(x * actual_width / base_width)
+        scaled_y = int(y * actual_height / base_height)
+        return scaled_x, scaled_y
+    
+    def tap(self, x: int, y: int, auto_scale: bool = True):
+        """Tap on screen at coordinates (auto-scales from 1080x1920 by default)"""
+        if auto_scale:
+            x, y = self.scale_coord(x, y)
         self._run_adb('shell', 'input', 'tap', str(x), str(y))
         time.sleep(0.3)
     
-    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
-        """Swipe from (x1,y1) to (x2,y2)"""
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300, auto_scale: bool = True):
+        """Swipe from (x1,y1) to (x2,y2) (auto-scales from 1080x1920 by default)"""
+        if auto_scale:
+            x1, y1 = self.scale_coord(x1, y1)
+            x2, y2 = self.scale_coord(x2, y2)
         self._run_adb('shell', 'input', 'swipe', 
                       str(x1), str(y1), str(x2), str(y2), str(duration_ms))
         time.sleep(0.5)
     
     def swipe_up(self, distance: int = 500):
-        """Swipe up to scroll down"""
-        # Screen center swipe up
-        self.swipe(540, 1200, 540, 1200 - distance, 200)
+        """Swipe up to scroll down (auto-scales)"""
+        # Base coordinates for 1080x1920 screen
+        base_y_start = 1200
+        base_y_end = base_y_start - distance
+        self.swipe(540, base_y_start, 540, base_y_end, 200)
     
     def swipe_down(self, distance: int = 500):
-        """Swipe down to scroll up"""
-        self.swipe(540, 600, 540, 600 + distance, 200)
+        """Swipe down to scroll up (auto-scales)"""
+        # Base coordinates for 1080x1920 screen
+        base_y_start = 600
+        base_y_end = base_y_start + distance
+        self.swipe(540, base_y_start, 540, base_y_end, 200)
     
     def press_key(self, keycode: int):
         """Press a key by keycode (e.g., 66 for Enter, 4 for Back)"""

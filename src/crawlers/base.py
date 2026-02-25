@@ -2,6 +2,7 @@
 Base crawler class and data structures.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable
 from enum import Enum
@@ -161,8 +162,24 @@ class BaseCrawler:
         self._cancelled = True
         self._update_progress(status=CrawlStatus.CANCELLED, message="已取消")
     
+    def pause(self):
+        """Pause the current crawl operation"""
+        self._paused = True
+        self._update_progress(status=CrawlStatus.PAUSED, message="⏸️ 已暂停")
+    
+    def resume(self):
+        """Resume the crawl operation"""
+        self._paused = False
+        self._update_progress(status=CrawlStatus.RUNNING, message="继续抓取中...")
+    
+    async def _check_pause(self):
+        """Check if paused and wait until resumed"""
+        while self._paused and not self._cancelled:
+            await asyncio.sleep(0.5)
+    
     def reset(self):
         """Reset crawler state"""
         self.results = []
         self.progress = CrawlProgress()
         self._cancelled = False
+        self._paused = False

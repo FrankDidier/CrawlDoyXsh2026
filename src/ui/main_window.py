@@ -255,12 +255,19 @@ class MainWindow(QMainWindow):
         self.start_btn.setObjectName("primaryButton")
         self.start_btn.clicked.connect(self.start_crawl)
         
+        self.pause_btn = QPushButton("⏸️ 暂停")
+        self.pause_btn.setObjectName("warningButton")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        self.pause_btn.setEnabled(False)
+        self._is_paused = False
+        
         self.stop_btn = QPushButton("⏹️ 停止")
         self.stop_btn.setObjectName("dangerButton")
         self.stop_btn.clicked.connect(self.stop_crawl)
         self.stop_btn.setEnabled(False)
         
         btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.pause_btn)
         btn_layout.addWidget(self.stop_btn)
         btn_layout.addStretch()
         
@@ -534,12 +541,34 @@ class MainWindow(QMainWindow):
     def _disable_crawl_ui(self):
         """Disable UI during crawl"""
         self.start_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         self.keyword_input.setEnabled(False)
         self.platform_combo.setEnabled(False)
         self.type_combo.setEnabled(False)
         self.mode_combo.setEnabled(False)
         self.emu_type_combo.setEnabled(False)
+        self._is_paused = False
+        self.pause_btn.setText("⏸️ 暂停")
+    
+    def toggle_pause(self):
+        """Toggle pause/resume crawling"""
+        if self._is_paused:
+            # Resume
+            self._is_paused = False
+            self.pause_btn.setText("⏸️ 暂停")
+            self.progress_label.setText("继续抓取中...")
+            logger.log_user_action("继续抓取")
+            if self.crawler:
+                self.crawler.resume()
+        else:
+            # Pause
+            self._is_paused = True
+            self.pause_btn.setText("▶️ 继续")
+            self.progress_label.setText("⏸️ 已暂停 - 点击继续按钮恢复")
+            logger.log_user_action("暂停抓取")
+            if self.crawler:
+                self.crawler.pause()
     
     def stop_crawl(self):
         """Stop crawling"""
@@ -619,12 +648,15 @@ class MainWindow(QMainWindow):
     def _reset_ui(self):
         """Reset UI after crawl"""
         self.start_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("⏸️ 暂停")
         self.stop_btn.setEnabled(False)
         self.keyword_input.setEnabled(True)
         self.platform_combo.setEnabled(True)
         self.type_combo.setEnabled(True)
         self.mode_combo.setEnabled(True)
         self.emu_type_combo.setEnabled(True)
+        self._is_paused = False
         self.worker = None
     
     def copy_all_results(self):

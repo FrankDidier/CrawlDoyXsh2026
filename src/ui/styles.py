@@ -118,6 +118,16 @@ QPushButton#successButton:hover {
     color: #1a1a2e;
 }
 
+QPushButton#warningButton {
+    border-color: #ffa502;
+    color: #ffa502;
+}
+
+QPushButton#warningButton:hover {
+    background-color: #ffa502;
+    color: #1a1a2e;
+}
+
 QTableWidget {
     background-color: #16213e;
     border: 2px solid #0f3460;
