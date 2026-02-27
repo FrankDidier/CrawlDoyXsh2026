@@ -270,15 +270,6 @@ class ADBController:
         """Check if app is installed"""
         success, output = self._run_adb('shell', 'pm', 'list', 'packages', package)
         return success and package in output
-    
-    def get_screen_size(self) -> Tuple[int, int]:
-        """Get screen resolution"""
-        success, output = self._run_adb('shell', 'wm', 'size')
-        if success:
-            match = re.search(r'(\d+)x(\d+)', output)
-            if match:
-                return int(match.group(1)), int(match.group(2))
-        return 1080, 1920  # Default
 
 
 # App package names

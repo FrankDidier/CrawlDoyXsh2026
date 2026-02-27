@@ -239,9 +239,9 @@ class TaobaoCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False, browser_type=browser_type)  # Always visible for Taobao
             
-            # Taobao search URL - must include page=1 and tab=all for results to load
-            # Without these parameters, the page may show empty/loading state
-            url = f"{self.SEARCH_URL}?page=1&q={quote(keyword)}&tab=all"
+            # Taobao search URL - 使用 s=0 表示从第1个商品开始 (每页约44个)
+            # s=0 是第1页, s=44 是第2页, s=88 是第3页...
+            url = f"{self.SEARCH_URL}?q={quote(keyword)}&s=0"
             self._update_progress(message="正在打开淘宝搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
@@ -330,11 +330,20 @@ class TaobaoCrawler(BaseCrawler):
         page_num = 1
         seen_stores = set()
         max_pages = (max_results // 40) + 5  # Estimate max pages needed
+        consecutive_empty = 0  # Track consecutive pages with no new stores
         
         while collected < max_results and page_num <= max_pages and not self._cancelled:
+            # 检查暂停状态
+            await self._check_pause()
+            
             self._update_progress(
-                message=f"正在抓取第 {page_num} 页... (已获取 {collected} 个店铺)"
+                message=f"📄 正在抓取第 {page_num} 页... (已获取 {collected} 个店铺)"
             )
+            
+            print(f"\n{'='*50}")
+            print(f"开始抓取第 {page_num} 页")
+            print(f"当前URL: {self._page.url[:80]}...")
+            print(f"{'='*50}")
             
             # Wait for page to load
             await asyncio.sleep(3)
@@ -342,12 +351,24 @@ class TaobaoCrawler(BaseCrawler):
             # Scroll to load all items on current page
             await self._scroll_page()
             
+            # 记录抓取前的数量
+            before_count = len(self.results)
+            
             # Find all store elements on current page
             stores_found = await self._extract_stores_from_page(max_results - collected, seen_stores)
             
-            if stores_found == 0 and page_num > 1:
-                self._update_progress(message=f"第 {page_num} 页已无更多店铺")
-                break
+            # 计算本页实际新增的店铺数
+            actual_new = len(self.results) - before_count
+            print(f"第{page_num}页提取完成: 本页找到{stores_found}个, 实际新增{actual_new}个, 总计{len(self.results)}个")
+            
+            if actual_new == 0:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    self._update_progress(message=f"连续{consecutive_empty}页无新店铺，停止抓取")
+                    print(f"连续{consecutive_empty}页无新店铺，停止")
+                    break
+            else:
+                consecutive_empty = 0
             
             collected = len(self.results)
             
@@ -355,17 +376,18 @@ class TaobaoCrawler(BaseCrawler):
                 current=collected,
                 total=max_results,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"已抓取 {collected}/{max_results} 个店铺 (第{page_num}页)"
+                message=f"✓ 已抓取 {collected}/{max_results} 个店铺 (第{page_num}页完成)"
             )
             
             # Try to go to next page
             if collected < max_results:
+                print(f"\n>>> 准备翻到第{page_num + 1}页...")
                 has_next = await self._go_to_next_page(page_num)
                 if not has_next:
-                    self._update_progress(message="已到最后一页")
+                    self._update_progress(message="🏁 已到最后一页")
                     break
                 page_num += 1
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
     
     async def _extract_stores_from_page(self, limit: int, seen_stores: set) -> int:
         """Extract stores from current page - use multiple selectors for complete extraction"""
@@ -610,84 +632,132 @@ class TaobaoCrawler(BaseCrawler):
         print(f"After scrolling: {len(final_links)} shop/tmall links visible")
     
     async def _go_to_next_page(self, current_page_num: int) -> bool:
-        """Go to next page, return True if successful"""
+        """Go to next page using multiple methods for reliability"""
+        next_page_num = current_page_num + 1
+        print(f"=== 翻页: 第{current_page_num}页 -> 第{next_page_num}页 ===")
+        
+        # 方法1: 通过URL参数翻页 (淘宝使用 s= 跳过商品数)
+        # 淘宝每页约44个商品，所以 page2 = s=44, page3 = s=88
         try:
-            next_page_num = current_page_num + 1
-            
-            # Get base URL and update page parameter
             current_url = self._page.url
+            skip_count = (next_page_num - 1) * 44
             
-            if 'page=' in current_url:
-                new_url = re.sub(r'page=\d+', f'page={next_page_num}', current_url)
+            # 构建新URL - 淘宝使用 s= 参数而不是 page=
+            if 's=' in current_url:
+                new_url = re.sub(r's=\d+', f's={skip_count}', current_url)
+            elif '?' in current_url:
+                new_url = current_url + f'&s={skip_count}'
             else:
-                if '?' in current_url:
-                    new_url = current_url + f'&page={next_page_num}'
-                else:
-                    new_url = current_url + f'?page={next_page_num}'
+                new_url = current_url + f'?s={skip_count}'
             
-            print(f"翻页: 从第{current_page_num}页到第{next_page_num}页")
+            # 同时更新 page 参数（如果存在）
+            if 'page=' in new_url:
+                new_url = re.sub(r'page=\d+', f'page={next_page_num}', new_url)
+            
+            print(f"方法1: URL翻页 -> {new_url[:100]}...")
             
             await self._page.goto(new_url, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(4)  # Wait longer for content to load
+            await asyncio.sleep(3)
             
-            # Scroll to load lazy content
+            # 滚动加载内容
             await self._page.evaluate('window.scrollBy(0, 500)')
             await asyncio.sleep(1)
             
-            # Check if page actually has content (multiple selectors)
+            # 检查页面是否有新内容
             shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
-            if len(shop_links) > 5:  # At least 5 links to be considered a valid page
-                print(f"第{next_page_num}页加载成功，有{len(shop_links)}个链接")
+            if len(shop_links) > 5:
+                print(f"✓ 方法1成功! 第{next_page_num}页有{len(shop_links)}个店铺链接")
                 return True
             else:
-                print(f"第{next_page_num}页只有{len(shop_links)}个链接，可能已到末页")
-                # Try scrolling more to load content
-                await self._scroll_page()
-                shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
-                if len(shop_links) > 5:
-                    return True
-                return False
-            
-            # Method 2: Find and click "下一页" button (fallback)
+                print(f"方法1: 只找到{len(shop_links)}个链接，尝试方法2...")
+        except Exception as e:
+            print(f"方法1失败: {e}")
+        
+        # 方法2: 点击"下一页"按钮
+        try:
             next_selectors = [
                 'button:has-text("下一页")',
                 'a:has-text("下一页")',
-                '[class*="next"]:not([class*="disabled"])',
-                '.next-pagination-item:has-text("下一页")',
+                '.next-btn',
+                '[class*="next"]:not([class*="disabled"]):not([disabled])',
+                '.next-pagination-item:last-child',
+                'button[class*="Next"]',
+                'a[class*="Next"]',
             ]
             
             for selector in next_selectors:
                 try:
                     next_btn = await self._page.query_selector(selector)
                     if next_btn:
+                        is_visible = await next_btn.is_visible()
                         is_disabled = await next_btn.get_attribute('disabled')
                         aria_disabled = await next_btn.get_attribute('aria-disabled')
-                        if not is_disabled and aria_disabled != 'true':
+                        class_name = await next_btn.get_attribute('class') or ''
+                        
+                        if is_visible and not is_disabled and aria_disabled != 'true' and 'disabled' not in class_name:
+                            print(f"方法2: 点击下一页按钮 (selector: {selector})")
                             await next_btn.click()
                             await asyncio.sleep(3)
-                            return True
+                            
+                            # 验证翻页成功
+                            shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
+                            if len(shop_links) > 5:
+                                print(f"✓ 方法2成功! 有{len(shop_links)}个店铺链接")
+                                return True
+                except Exception as e:
+                    continue
+            
+            print("方法2: 未找到可点击的下一页按钮，尝试方法3...")
+        except Exception as e:
+            print(f"方法2失败: {e}")
+        
+        # 方法3: 点击页码数字
+        try:
+            # 直接点击下一个页码
+            page_num_selector = f'a:has-text("{next_page_num}"), span:has-text("{next_page_num}")'
+            page_btns = await self._page.query_selector_all(page_num_selector)
+            
+            for btn in page_btns:
+                try:
+                    # 只点击看起来像页码的元素
+                    text = await btn.inner_text()
+                    if text.strip() == str(next_page_num):
+                        is_visible = await btn.is_visible()
+                        if is_visible:
+                            print(f"方法3: 点击页码 {next_page_num}")
+                            await btn.click()
+                            await asyncio.sleep(3)
+                            
+                            shop_links = await self._page.query_selector_all('a[href*="store.taobao.com"], a[href*=".tmall.com"]')
+                            if len(shop_links) > 5:
+                                print(f"✓ 方法3成功! 有{len(shop_links)}个店铺链接")
+                                return True
                 except:
                     continue
             
-            # Method 3: Try clicking next page number
-            try:
-                current = await self._page.query_selector('[class*="current"], [class*="active"]')
-                if current:
-                    current_text = await current.inner_text()
-                    next_num = int(current_text) + 1
-                    next_page = await self._page.query_selector(f'a:has-text("{next_num}")')
-                    if next_page:
-                        await next_page.click()
-                        await asyncio.sleep(3)
-                        return True
-            except:
-                pass
-            
-            return False
-            
+            print("方法3: 未找到页码按钮")
         except Exception as e:
-            print(f"翻页失败: {e}")
-            return False
+            print(f"方法3失败: {e}")
+        
+        # 方法4: 键盘快捷键翻页 (有些网站支持)
+        try:
+            print("方法4: 尝试键盘翻页...")
+            await self._page.keyboard.press('PageDown')
+            await asyncio.sleep(1)
+            await self._page.keyboard.press('End')
+            await asyncio.sleep(1)
+            
+            # 找分页区域并点击
+            pagination = await self._page.query_selector('[class*="pagination"], [class*="Pagination"]')
+            if pagination:
+                # 滚动到分页区域
+                await pagination.scroll_into_view_if_needed()
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"方法4失败: {e}")
+        
+        print(f"✗ 所有翻页方法都失败了，可能已到最后一页")
+        return False
     
     async def _crawl_products_with_pagination(self, keyword: str, max_results: int):
         """Crawl products with pagination support"""
