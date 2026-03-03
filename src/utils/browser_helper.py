@@ -234,11 +234,20 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     
     errors = []
     
-    # Common launch arguments
+    # Common launch arguments - 增强反检测
     common_args = [
         '--disable-blink-features=AutomationControlled',
+        '--disable-automation',
+        '--disable-infobars',
         '--no-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-web-security',
+        '--ignore-certificate-errors',
+        '--allow-running-insecure-content',
+        # 隐藏自动化提示栏
+        '--disable-features=AutomationControlled',
+        '--excludeSwitches=enable-automation',
+        '--useAutomationExtension=false',
     ]
     
     # Determine browser order based on user selection
@@ -279,6 +288,9 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     else:
         browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
     
+    # 真实的用户代理 (模拟普通Windows用户)
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    
     # Try browsers in order
     for name, channel in browsers_to_try:
         if channel is None:
@@ -299,6 +311,22 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
                 args=common_args,
+                user_agent=user_agent,
+                # 额外的反检测设置
+                ignore_https_errors=True,
+                java_script_enabled=True,
+                bypass_csp=True,  # 绕过内容安全策略
+                extra_http_headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                },
             )
             page = context.pages[0] if context.pages else await context.new_page()
             print(f"使用 {name} 浏览器")

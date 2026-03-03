@@ -75,8 +75,29 @@ class JDCrawler(BaseCrawler):
         except Exception as e:
             raise RuntimeError(f"启动浏览器失败: {e}")
         
+        # 添加多层反检测脚本
         await self._page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            // 1. 隐藏 webdriver 标识
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+                configurable: true
+            });
+            
+            // 2. 覆盖 navigator.plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            
+            // 3. 覆盖 chrome 对象
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+            
+            // 4. 删除自动化属性
+            delete navigator.__proto__.webdriver;
         """)
     
     async def _close_browser(self):
@@ -115,14 +136,27 @@ class JDCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False, browser_type=browser_type)
             
+            import random
+            
+            # 先访问京东首页，模拟真实用户行为
+            self._update_progress(message="正在打开京东首页...")
+            await self._page.goto(self.BASE_URL, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(random.uniform(2, 4))
+            
+            # 模拟人类行为
+            for _ in range(3):
+                x = random.randint(100, 800)
+                y = random.randint(100, 500)
+                await self._page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+            
             url = f"{self.SEARCH_URL}?keyword={quote(keyword)}"
             self._update_progress(message="正在打开京东搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
             # Longer initial wait with randomness to avoid detection
-            import random
-            wait_time = random.uniform(6, 10)
+            wait_time = random.uniform(5, 8)
             await asyncio.sleep(wait_time)
             
             # Check for rate limiting or login

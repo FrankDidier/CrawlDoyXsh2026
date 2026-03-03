@@ -80,8 +80,52 @@ class TaobaoCrawler(BaseCrawler):
         except Exception as e:
             raise RuntimeError(f"启动浏览器失败: {e}")
         
+        # 添加多层反检测脚本
         await self._page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            // 1. 隐藏 webdriver 标识
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+                configurable: true
+            });
+            
+            // 2. 覆盖 navigator.plugins (让它看起来像真实浏览器)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            
+            // 3. 覆盖 navigator.languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['zh-CN', 'zh', 'en']
+            });
+            
+            // 4. 覆盖 chrome 对象
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+            
+            // 5. 覆盖权限查询
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // 6. 删除自动化相关属性
+            delete navigator.__proto__.webdriver;
+            
+            // 7. 模拟真实的 Connection 对象
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 100,
+                    downlink: 10,
+                    saveData: false
+                })
+            });
         """)
     
     async def _close_browser(self):
@@ -239,13 +283,23 @@ class TaobaoCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False, browser_type=browser_type)  # Always visible for Taobao
             
+            # 先访问淘宝首页，模拟真实用户行为
+            self._update_progress(message="正在打开淘宝首页...")
+            await self._page.goto("https://www.taobao.com", wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(2)
+            
+            # 模拟鼠标移动（人类行为）
+            await self._simulate_human_behavior()
+            
             # Taobao search URL - 使用 s=0 表示从第1个商品开始 (每页约44个)
-            # s=0 是第1页, s=44 是第2页, s=88 是第3页...
             url = f"{self.SEARCH_URL}?q={quote(keyword)}&s=0"
             self._update_progress(message="正在打开淘宝搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
             await asyncio.sleep(3)
+            
+            # 检测是否被反爬虫拦截
+            await self._check_and_handle_block()
             
             # Check for login requirement
             await self._handle_login()
@@ -302,6 +356,85 @@ class TaobaoCrawler(BaseCrawler):
             await self._close_browser()  # Will keep browser open if _keep_browser_open is True
         
         return self.results
+    
+    async def _simulate_human_behavior(self):
+        """模拟人类行为 - 随机鼠标移动和滚动"""
+        import random
+        
+        try:
+            # 随机移动鼠标
+            for _ in range(3):
+                x = random.randint(100, 800)
+                y = random.randint(100, 600)
+                await self._page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+            
+            # 随机滚动
+            await self._page.evaluate(f'window.scrollBy(0, {random.randint(100, 300)})')
+            await asyncio.sleep(random.uniform(0.5, 1.0))
+            
+        except Exception as e:
+            print(f"模拟人类行为失败: {e}")
+    
+    async def _check_and_handle_block(self):
+        """检测并处理反爬虫拦截"""
+        try:
+            page_content = await self._page.content()
+            current_url = self._page.url
+            
+            # 检测常见的反爬虫特征
+            block_indicators = [
+                'punish/deny',
+                'rgv587_flag',
+                '访问受限',
+                '访问过于频繁',
+                '滑块验证',
+                'captcha',
+                'verify',
+            ]
+            
+            is_blocked = any(indicator in page_content or indicator in current_url 
+                           for indicator in block_indicators)
+            
+            if is_blocked:
+                self._update_progress(
+                    status=CrawlStatus.WAITING,
+                    message="⚠️ 检测到反爬虫拦截！\n"
+                            "请在浏览器中:\n"
+                            "1. 完成滑块验证(如果有)\n"
+                            "2. 或手动刷新页面\n"
+                            "3. 或手动搜索关键词\n"
+                            "完成后等待10秒自动继续..."
+                )
+                
+                # 等待用户处理
+                for i in range(60):  # 最多等1分钟
+                    await asyncio.sleep(2)
+                    new_content = await self._page.content()
+                    new_url = self._page.url
+                    
+                    # 检查是否已经绕过
+                    still_blocked = any(indicator in new_content or indicator in new_url 
+                                       for indicator in block_indicators)
+                    
+                    if not still_blocked and 's.taobao.com' in new_url:
+                        self._update_progress(message="✓ 已绕过反爬虫检测")
+                        await asyncio.sleep(2)
+                        return
+                    
+                    if self._cancelled:
+                        return
+                
+                # 如果还是被拦截，提示用户
+                self._update_progress(
+                    message="⚠️ 仍被拦截，建议:\n"
+                            "1. 换一个IP地址\n"
+                            "2. 清除浏览器Cookie\n"
+                            "3. 稍后再试"
+                )
+                
+        except Exception as e:
+            print(f"检测反爬虫失败: {e}")
     
     async def _handle_login(self):
         """Handle Taobao login if needed"""
