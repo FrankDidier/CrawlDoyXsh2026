@@ -18,6 +18,7 @@ validators>=0.22.0
 
 # For web crawling/automation
 playwright>=1.40.0
+playwright-stealth>=1.0.6
 
 # For async operations
 asyncio-compat>=0.1.0

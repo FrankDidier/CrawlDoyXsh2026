@@ -266,9 +266,14 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.stop_crawl)
         self.stop_btn.setEnabled(False)
         
+        self.clear_cookies_btn = QPushButton("🍪 清除Cookie")
+        self.clear_cookies_btn.setToolTip("清除浏览器Cookie和登录状态\n用于解决被反爬虫拦截的问题")
+        self.clear_cookies_btn.clicked.connect(self.clear_cookies)
+        
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.pause_btn)
         btn_layout.addWidget(self.stop_btn)
+        btn_layout.addWidget(self.clear_cookies_btn)
         btn_layout.addStretch()
         
         search_layout.addLayout(btn_layout, 3, 0, 1, 6)
@@ -578,6 +583,53 @@ class MainWindow(QMainWindow):
             self.crawler.cancel()
         
         self.progress_label.setText("正在停止...")
+    
+    def clear_cookies(self):
+        """Clear browser cookies and profile to bypass anti-bot detection"""
+        logger.log_user_action("清除Cookie")
+        
+        reply = QMessageBox.question(
+            self,
+            "确认清除Cookie",
+            "这将清除所有浏览器Cookie和登录状态。\n"
+            "清除后需要重新登录淘宝/京东等平台。\n\n"
+            "确定要继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            from ..utils.browser_helper import clear_user_data_dir
+            
+            # Clear all shared browser instances
+            from ..crawlers.taobao import TaobaoCrawler
+            from ..crawlers.jd import JDCrawler
+            
+            TaobaoCrawler._shared_context = None
+            TaobaoCrawler._shared_page = None
+            TaobaoCrawler._shared_playwright = None
+            
+            JDCrawler._shared_context = None
+            JDCrawler._shared_page = None
+            JDCrawler._shared_playwright = None
+            
+            # Clear user data directory
+            if clear_user_data_dir():
+                QMessageBox.information(
+                    self,
+                    "清除成功",
+                    "✓ 浏览器Cookie和配置已清除！\n\n"
+                    "下次抓取时将使用全新的浏览器配置。\n"
+                    "请重新登录淘宝/京东等平台。"
+                )
+                self.progress_label.setText("Cookie已清除，请重新开始抓取")
+            else:
+                QMessageBox.warning(
+                    self,
+                    "清除失败",
+                    "清除Cookie失败，可能是浏览器仍在运行。\n\n"
+                    "请先关闭所有由本软件打开的浏览器窗口，然后重试。"
+                )
     
     def on_progress_updated(self, progress: CrawlProgress):
         """Handle progress update"""

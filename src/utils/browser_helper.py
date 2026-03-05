@@ -9,6 +9,15 @@ import sys
 import subprocess
 from typing import Optional, Tuple
 
+# Try to import playwright-stealth
+try:
+    from playwright_stealth import stealth_async
+    HAS_STEALTH = True
+except ImportError:
+    HAS_STEALTH = False
+    print("提示: 安装 playwright-stealth 可以更好地绕过反爬虫检测")
+    print("运行: pip install playwright-stealth")
+
 
 # Browser selection mapping
 BROWSER_CHANNELS = {
@@ -218,6 +227,48 @@ def get_user_data_dir() -> str:
         return os.path.expanduser('~/.crawler_browser_profile')
 
 
+async def apply_stealth(page):
+    """Apply stealth measures to page to avoid bot detection"""
+    if HAS_STEALTH:
+        try:
+            await stealth_async(page)
+            return True
+        except Exception as e:
+            print(f"应用stealth失败: {e}")
+    return False
+
+
+async def clear_browser_cookies(context):
+    """Clear all cookies from the browser context"""
+    try:
+        await context.clear_cookies()
+        print("✓ 已清除所有Cookie")
+        return True
+    except Exception as e:
+        print(f"清除Cookie失败: {e}")
+        return False
+
+
+def clear_user_data_dir():
+    """
+    Clear the user data directory (browser profile).
+    This will reset login sessions and cookies.
+    """
+    import shutil
+    
+    user_data_dir = get_user_data_dir()
+    
+    try:
+        if os.path.exists(user_data_dir):
+            shutil.rmtree(user_data_dir)
+            print(f"✓ 已清除浏览器配置文件: {user_data_dir}")
+            return True
+    except Exception as e:
+        print(f"清除浏览器配置失败: {e}")
+    
+    return False
+
+
 async def create_browser_context(playwright, headless: bool = False, browser_type: str = "自动"):
     """
     Create a browser context with specified or best available browser.
@@ -329,6 +380,8 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
                 },
             )
             page = context.pages[0] if context.pages else await context.new_page()
+            # 应用stealth反检测
+            await apply_stealth(page)
             print(f"使用 {name} 浏览器")
             return context, page, None
         except Exception as e:
@@ -346,6 +399,8 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
             locale='zh-CN',
         )
         page = await context.new_page()
+        # 应用stealth反检测
+        await apply_stealth(page)
         print("使用内置 Chromium 浏览器")
         return context, page, browser
     except Exception as e:
