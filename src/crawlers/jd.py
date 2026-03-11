@@ -245,185 +245,275 @@ class JDCrawler(BaseCrawler):
                 if self._cancelled:
                     return
     
+    async def _scroll_to_load_all(self):
+        """JD loads bottom ~30 items only after scrolling - trigger full page load"""
+        prev_height = 0
+        for i in range(20):
+            await self._page.evaluate(f'window.scrollBy(0, {500 + (i % 3) * 200})')
+            await asyncio.sleep(0.6)
+            current_height = await self._page.evaluate('document.body.scrollHeight')
+            if current_height == prev_height and i > 8:
+                break
+            prev_height = current_height
+        
+        await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+        await asyncio.sleep(1.5)
+        await self._page.evaluate('window.scrollBy(0, -300)')
+        await asyncio.sleep(0.5)
+        await self._page.evaluate('window.scrollBy(0, 600)')
+        await asyncio.sleep(1)
+        await self._page.evaluate('window.scrollTo(0, 0)')
+        await asyncio.sleep(0.5)
+    
+    async def _jd_go_to_next_page(self, current_page: int) -> bool:
+        """Navigate to next page on JD search results"""
+        next_page = current_page + 1
+        try:
+            current_url = self._page.url
+            if 'page=' in current_url:
+                new_url = re.sub(r'page=\d+', f'page={next_page}', current_url)
+            elif '?' in current_url:
+                new_url = current_url + f'&page={next_page}'
+            else:
+                new_url = current_url + f'?page={next_page}'
+            
+            if 's=' in new_url:
+                new_url = re.sub(r's=\d+', f's={(next_page - 1) * 60}', new_url)
+            
+            await self._page.goto(new_url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(3)
+            
+            item_count = await self._page.evaluate('''() => {
+                return document.querySelectorAll('li.gl-item, div[data-sku], [class*="gl-item"]').length;
+            }''')
+            if item_count > 0:
+                print(f"✓ JD翻页成功! 第{next_page}页有{item_count}个商品")
+                return True
+        except Exception as e:
+            print(f"JD URL翻页失败: {e}")
+        
+        try:
+            next_selectors = [
+                'a.pn-next:not(.disabled)',
+                'a:has-text("下一页"):not(.disabled)',
+                '[class*="next"]:not(.disabled)',
+            ]
+            for selector in next_selectors:
+                try:
+                    btn = await self._page.query_selector(selector)
+                    if btn and await btn.is_visible():
+                        await btn.click()
+                        await asyncio.sleep(3)
+                        return True
+                except:
+                    continue
+        except Exception as e:
+            print(f"JD按钮翻页失败: {e}")
+        
+        return False
+    
     async def _crawl_stores(self, max_results: int):
-        """Crawl store info from JD search results"""
+        """Crawl store info from JD search results with pagination"""
         import random
         self._update_progress(message="正在抓取京东店铺...")
         
         collected = 0
-        scroll_count = 0
-        max_scrolls = max(50, max_results // 10)
+        page_num = 1
+        max_pages = (max_results // 30) + 5
         seen_stores = set()
-        no_new_results_count = 0
+        consecutive_empty = 0
         
-        while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Random delay between 4-8 seconds to avoid detection
-            await asyncio.sleep(random.uniform(4, 8))
-            
-            try:
-                items = await self._page.query_selector_all('li.gl-item, .gl-i-wrap, div[data-sku], .J-goods-list .gl-item')
-            except Exception as e:
-                print(f"查询商品列表失败: {e}")
-                await asyncio.sleep(3)
-                continue
+        while collected < max_results and page_num <= max_pages and not self._cancelled:
+            await self._check_pause()
             
             self._update_progress(
-                total=max_results,
-                current=collected,
-                percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"找到 {len(items)} 个商品，已提取 {collected} 个店铺"
+                message=f"📄 正在抓取第 {page_num} 页... (已获取 {collected} 个店铺)"
             )
             
+            await asyncio.sleep(random.uniform(2, 4))
+            await self._scroll_to_load_all()
+            
+            store_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const items = document.querySelectorAll('li.gl-item, .gl-i-wrap, div[data-sku], [class*="gl-item"]');
+                for (const item of items) {
+                    // Try multiple selectors for store links
+                    const storeLink = item.querySelector(
+                        'a.curr-shop, a.hd-shopname, a[href*="mall.jd.com"], a[href*="shop.jd.com"], ' +
+                        '[class*="shop"] a, [class*="store"] a, .p-shop a, .shop-name a'
+                    );
+                    if (!storeLink) continue;
+                    let storeName = storeLink.innerText.trim();
+                    let storeUrl = storeLink.getAttribute('href') || '';
+                    if (!storeName || storeName.length < 2 || !storeUrl) continue;
+                    if (seen.has(storeName)) continue;
+                    seen.add(storeName);
+                    if (storeUrl.startsWith('//')) storeUrl = 'https:' + storeUrl;
+                    results.push({ name: storeName, url: storeUrl });
+                }
+                // Also try standalone shop links not in product items
+                const shopLinks = document.querySelectorAll('a[href*="mall.jd.com"], a[href*="shop.jd.com"]');
+                for (const link of shopLinks) {
+                    const name = link.innerText.trim();
+                    let url = link.getAttribute('href') || '';
+                    if (!name || name.length < 2 || seen.has(name)) continue;
+                    if (url.startsWith('//')) url = 'https:' + url;
+                    if (url.includes('mall.jd.com') || url.includes('shop.jd.com')) {
+                        seen.add(name);
+                        results.push({ name: name, url: url });
+                    }
+                }
+                return results;
+            }''')
+            
+            print(f"第{page_num}页JS提取到 {len(store_data)} 个店铺")
+            
             new_this_round = 0
-            for item in items:
+            for item in store_data:
                 if collected >= max_results or self._cancelled:
                     break
-                
                 try:
-                    store_link = await item.query_selector('a.curr-shop, a[href*="mall.jd.com"], a[href*="shop.jd.com"], [class*="shop"] a')
-                    if not store_link:
+                    store_name = item.get('name', '').strip()
+                    store_url = item.get('url', '').strip()
+                    if not store_name or store_name in seen_stores or not store_url:
                         continue
-                    
-                    store_url = await store_link.get_attribute('href')
-                    store_name = await store_link.inner_text()
-                    
-                    if not store_name or not store_url:
-                        continue
-                    
-                    store_name = store_name.strip()
-                    
-                    if store_name in seen_stores or not store_name:
-                        continue
-                    
                     seen_stores.add(store_name)
                     
-                    if store_url.startswith('//'):
-                        store_url = 'https:' + store_url
-                    
                     share_text = f"【京东店铺】{store_name} {store_url}"
-                    
                     result = CrawlResult(
-                        platform=self.platform,
-                        content_type=ContentType.STORE,
-                        url=store_url,
-                        share_text=share_text,
-                        title="",
-                        account_id="",
-                        account_name="",
+                        platform=self.platform, content_type=ContentType.STORE,
+                        url=store_url, share_text=share_text,
+                        title="", account_id="", account_name="",
                         store_name=store_name,
                     )
-                    
                     self._add_result(result)
                     collected += 1
                     new_this_round += 1
-                    
                     self._update_progress(
                         current=collected,
                         percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
                         message=f"已抓取 {collected}/{max_results} 个店铺"
                     )
-                    
                 except Exception as e:
                     print(f"提取店铺信息失败: {e}")
                     continue
             
             if new_this_round == 0:
-                no_new_results_count += 1
-                if no_new_results_count >= 3:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    self._update_progress(message=f"连续{consecutive_empty}页无新店铺，停止")
                     break
             else:
-                no_new_results_count = 0
+                consecutive_empty = 0
             
-            await self._page.evaluate('window.scrollBy(0, 800)')
-            await asyncio.sleep(3)
-            scroll_count += 1
+            if collected < max_results:
+                has_next = await self._jd_go_to_next_page(page_num)
+                if not has_next:
+                    self._update_progress(message="🏁 已到最后一页")
+                    break
+                page_num += 1
+                await asyncio.sleep(random.uniform(1, 3))
     
     async def _crawl_products(self, max_results: int):
-        """Crawl product info from JD search results"""
+        """Crawl product info from JD search results with pagination"""
+        import random
         self._update_progress(message="正在抓取京东商品...")
         
         collected = 0
-        scroll_count = 0
-        max_scrolls = max(50, max_results // 10)
+        page_num = 1
+        max_pages = (max_results // 30) + 5
         seen_urls = set()
-        no_new_results_count = 0
+        consecutive_empty = 0
         
-        while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            await asyncio.sleep(4)
+        while collected < max_results and page_num <= max_pages and not self._cancelled:
+            await self._check_pause()
             
-            try:
-                items = await self._page.query_selector_all('li.gl-item, .gl-i-wrap, div[data-sku]')
-            except Exception as e:
-                print(f"查询商品列表失败: {e}")
-                await asyncio.sleep(3)
-                continue
+            self._update_progress(
+                message=f"📄 正在抓取第 {page_num} 页... (已获取 {collected} 个商品)"
+            )
+            
+            await asyncio.sleep(random.uniform(2, 4))
+            await self._scroll_to_load_all()
+            
+            product_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const items = document.querySelectorAll('li.gl-item, .gl-i-wrap, div[data-sku], [class*="gl-item"]');
+                for (const item of items) {
+                    const productLink = item.querySelector('a[href*="item.jd.com"]');
+                    if (!productLink) continue;
+                    let productUrl = productLink.getAttribute('href') || '';
+                    if (!productUrl) continue;
+                    if (productUrl.startsWith('//')) productUrl = 'https:' + productUrl;
+                    const cleanUrl = productUrl.split('?')[0];
+                    if (seen.has(cleanUrl)) continue;
+                    seen.add(cleanUrl);
+                    let title = '';
+                    const titleEl = item.querySelector('.p-name em, .p-name a, [class*="title"] em, [class*="title"] a');
+                    if (titleEl) title = titleEl.innerText.trim();
+                    if (!title) title = productLink.innerText.trim();
+                    let storeName = '';
+                    const storeEl = item.querySelector('a.curr-shop, a.hd-shopname, [class*="shop"] a, .p-shop a');
+                    if (storeEl) storeName = storeEl.innerText.trim();
+                    let price = '';
+                    const priceEl = item.querySelector('.p-price i, [class*="price"] i, [class*="price"] span');
+                    if (priceEl) price = priceEl.innerText.trim();
+                    results.push({ url: productUrl, title: title || '', storeName: storeName || '', price: price || '' });
+                }
+                return results;
+            }''')
+            
+            print(f"第{page_num}页JS提取到 {len(product_data)} 个商品")
             
             new_this_round = 0
-            for item in items:
+            for item in product_data:
                 if collected >= max_results or self._cancelled:
                     break
-                
                 try:
-                    product_link = await item.query_selector('a[href*="item.jd.com"]')
-                    if not product_link:
-                        continue
-                    
-                    product_url = await product_link.get_attribute('href')
+                    product_url = item.get('url', '')
+                    title = item.get('title', '').strip()[:100]
+                    store_name = item.get('storeName', '').strip()
+                    price = item.get('price', '').strip()
                     
                     if not product_url or product_url in seen_urls:
                         continue
-                    
-                    if product_url.startswith('//'):
-                        product_url = 'https:' + product_url
-                    
+                    if not title:
+                        continue
                     seen_urls.add(product_url)
                     
-                    title_elem = await item.query_selector('.p-name em, .p-name a, [class*="title"]')
-                    title = ""
-                    if title_elem:
-                        title = await title_elem.inner_text()
-                        title = title.strip()[:100] if title else ""
-                    
-                    store_name = ""
-                    store_elem = await item.query_selector('a.curr-shop, [class*="shop"]')
-                    if store_elem:
-                        store_name = await store_elem.inner_text()
-                        store_name = store_name.strip() if store_name else ""
-                    
                     share_text = f"【京东】{title} {product_url}"
-                    
                     result = CrawlResult(
-                        platform=self.platform,
-                        content_type=ContentType.PRODUCT,
-                        url=product_url,
-                        share_text=share_text,
-                        title=title,
-                        product_name=title,
-                        store_name=store_name,
+                        platform=self.platform, content_type=ContentType.PRODUCT,
+                        url=product_url, share_text=share_text,
+                        title=title, product_name=title,
+                        store_name=store_name, price=price,
                     )
-                    
                     self._add_result(result)
                     collected += 1
                     new_this_round += 1
-                    
                 except Exception as e:
                     print(f"提取商品信息失败: {e}")
                     continue
             
             self._update_progress(
-                current=collected,
-                total=max_results,
+                current=collected, total=max_results,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"已抓取 {collected}/{max_results} 个商品"
+                message=f"✓ 已抓取 {collected}/{max_results} 个商品 (第{page_num}页完成)"
             )
             
             if new_this_round == 0:
-                no_new_results_count += 1
-                if no_new_results_count >= 3:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    self._update_progress(message=f"连续{consecutive_empty}页无新商品，停止")
                     break
             else:
-                no_new_results_count = 0
+                consecutive_empty = 0
             
-            await self._page.evaluate('window.scrollBy(0, 800)')
-            await asyncio.sleep(3)
-            scroll_count += 1
+            if collected < max_results:
+                has_next = await self._jd_go_to_next_page(page_num)
+                if not has_next:
+                    self._update_progress(message="🏁 已到最后一页")
+                    break
+                page_num += 1
+                await asyncio.sleep(random.uniform(1, 3))

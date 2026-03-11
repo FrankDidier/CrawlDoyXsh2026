@@ -466,7 +466,6 @@ class TaobaoCrawler(BaseCrawler):
         consecutive_empty = 0  # Track consecutive pages with no new stores
         
         while collected < max_results and page_num <= max_pages and not self._cancelled:
-            # 检查暂停状态
             await self._check_pause()
             
             self._update_progress(
@@ -523,88 +522,115 @@ class TaobaoCrawler(BaseCrawler):
                 await asyncio.sleep(2)
     
     async def _extract_stores_from_page(self, limit: int, seen_stores: set) -> int:
-        """Extract stores from current page - use multiple selectors for complete extraction"""
+        """Extract stores from current page using comprehensive JS extraction"""
         count = 0
-        seen_urls = set()  # Track unique URLs
+        seen_urls = set()
         
-        # Invalid store names to filter out
         invalid_names = {
             '开店', '阿里旺旺', '淘宝', '天猫', '登录', '注册', '购物车',
             '我的淘宝', '收藏夹', '客服', '帮助', '首页', '分类', '搜索',
             '免费开店', '淘宝开店', '天猫开店', '开直播店', '更多',
             '进店逛逛', '进店', '逛逛', '查看', '详情', '相似', '找相似',
             '加购', '收藏', '对比', '宝贝', '购买', '立即购买',
+            '天猫超市', '天猫国际', '淘宝直播',
         }
         
-        # Use multiple selectors to find all store links
-        # Each selector targets different page structures
-        selectors = [
-            'a[href*="store.taobao.com/shop"]',           # Standard taobao store link
-            'a[href*=".taobao.com/shop/view_shop"]',      # View shop format
-            'a[href*="shop"][href*=".taobao.com"]',       # Shop in taobao domain
-            '[class*="shopname"] a',                       # Class contains shopname
-            '[class*="shop-name"] a',                      # Class shop-name
-            '[class*="store-name"] a',                     # Class store-name
-            '[data-spm*="shop"] a',                        # Data attribute with shop
-            '.Card--doubleCard a[href*="taobao.com"]',     # Card structure
-            '.content--content a[href*="shop"]',           # Content structure
-        ]
+        store_data = await self._page.evaluate('''() => {
+            const results = [];
+            const seen = new Set();
+            const allLinks = document.querySelectorAll('a');
+            
+            for (const link of allLinks) {
+                const href = link.getAttribute('href') || '';
+                if (!href) continue;
+                
+                let isStore = false;
+                
+                // Pattern 1: store.taobao.com (any path)
+                if (href.includes('store.taobao.com')) isStore = true;
+                // Pattern 2: shopXXXXX.taobao.com
+                else if (/shop\\d+\\.taobao\\.com/.test(href)) isStore = true;
+                // Pattern 3: xxx.tmall.com (store subdomain)
+                else if (/\\/\\/[a-z][a-z0-9-]+\\.tmall\\.com/.test(href) &&
+                         !href.includes('detail.tmall') && !href.includes('login') &&
+                         !href.includes('pages.tmall') && !href.includes('www.tmall')) isStore = true;
+                // Pattern 4: store links with appUid
+                else if (href.includes('view_shop') || href.includes('appUid=')) isStore = true;
+                // Pattern 5: shop.m.taobao.com
+                else if (href.includes('shop.m.taobao.com')) isStore = true;
+                
+                if (!isStore) continue;
+                
+                // Skip product/item links that happen to be on taobao/tmall
+                if (href.includes('item.htm') || href.includes('detail.tmall') || 
+                    href.includes('item.taobao') || href.includes('ishop.taobao') ||
+                    href.includes('zhaoshang.tmall') || href.includes('login') ||
+                    href.includes('member') || href.includes('cart') ||
+                    href.includes('favorite') || href.includes('rate')) continue;
+                
+                const cleanHref = href.split('&spm')[0].split('&scm')[0];
+                if (seen.has(cleanHref)) continue;
+                seen.add(cleanHref);
+                
+                // Get store name - try the link text, then look for nearby store name elements
+                let storeName = link.innerText.trim();
+                
+                // If link text is empty or too short, try parent/sibling
+                if (!storeName || storeName.length < 2) {
+                    const parent = link.parentElement;
+                    if (parent) {
+                        // Look for store-name class in parent
+                        const nameEl = parent.querySelector('[class*="shopname"], [class*="shop-name"], [class*="store"]');
+                        if (nameEl) storeName = nameEl.innerText.trim();
+                        // Fallback: try parent text
+                        if (!storeName || storeName.length < 2) {
+                            storeName = parent.innerText.split('\\n')[0].trim();
+                        }
+                    }
+                }
+                
+                results.push({
+                    href: href,
+                    cleanHref: cleanHref,
+                    storeName: storeName || ''
+                });
+            }
+            return results;
+        }''')
         
-        all_shop_links = []
-        seen_elements = set()  # To avoid processing same element twice
+        print(f"JS extraction found {len(store_data)} store links")
         
-        for selector in selectors:
-            try:
-                links = await self._page.query_selector_all(selector)
-                for link in links:
-                    # Get unique identifier for element
-                    elem_id = await link.evaluate('el => el.outerHTML.substring(0, 200)')
-                    if elem_id not in seen_elements:
-                        seen_elements.add(elem_id)
-                        all_shop_links.append(link)
-            except:
-                continue
-        
-        print(f"Found {len(all_shop_links)} shop links using multiple selectors")
-        
-        for link in all_shop_links:
+        for item in store_data:
             if count >= limit or self._cancelled:
                 break
             
             try:
-                href = await link.get_attribute('href') or ""
-                if not href or 'store.taobao.com/shop' not in href:
-                    continue
-                
-                # Get store name from link text
-                store_name = await link.inner_text() or ""
+                href = item.get('href', '')
+                store_name = item.get('storeName', '')
                 store_name = self._clean_store_name(store_name)
                 
-                # Filter invalid names
                 if not store_name or len(store_name) < 2:
                     continue
                 if store_name in invalid_names:
                     continue
+                if not any(c.isalnum() for c in store_name):
+                    continue
                 
-                # Normalize URL
                 store_url = self._normalize_store_url(href)
-                
                 if not store_url:
                     continue
                 
-                # Skip duplicates (by URL, more reliable than name)
                 if store_url in seen_urls:
                     continue
-                
-                # Also skip if name already seen (handles tmall vs taobao same store)
                 if store_name in seen_stores:
                     continue
                 
                 seen_urls.add(store_url)
                 seen_stores.add(store_name)
                 
-                # Create result
-                share_text = f"【淘宝店铺】{store_name} {store_url}"
+                is_tmall = '.tmall.com' in store_url
+                prefix = "天猫店铺" if is_tmall else "淘宝店铺"
+                share_text = f"【{prefix}】{store_name} {store_url}"
                 
                 result = CrawlResult(
                     platform=self.platform,
@@ -624,145 +650,47 @@ class TaobaoCrawler(BaseCrawler):
                 print(f"提取店铺链接失败: {e}")
                 continue
         
-        # Method 2: Also check for tmall store links if not enough results
-        if count < limit:
-            tmall_links = await self._page.query_selector_all('a[href*=".tmall.com"]')
-            print(f"Found {len(tmall_links)} tmall links on page")
-            
-            # Invalid store names to filter out
-            invalid_names = {
-                '开店', '阿里旺旺', '淘宝', '天猫', '登录', '注册', '购物车',
-                '我的淘宝', '收藏夹', '客服', '帮助', '首页', '分类', '搜索',
-                '免费开店', '淘宝开店', '天猫开店', '开直播店', '更多',
-            }
-            
-            for link in tmall_links:
-                if count >= limit or self._cancelled:
-                    break
-                
-                try:
-                    href = await link.get_attribute('href') or ""
-                    
-                    # Skip non-store links
-                    if 'detail.tmall.com' in href or 'item.htm' in href or 'item.taobao' in href:
-                        continue
-                    if 'ishop.taobao' in href or 'zhaoshang.tmall' in href:
-                        continue
-                    if 'login' in href.lower() or 'member' in href.lower():
-                        continue
-                    
-                    # Only accept store/shop links
-                    if not any(x in href for x in ['store.taobao', '.tmall.com/']):
-                        continue
-                    
-                    # Get store name
-                    store_name = await link.inner_text() or ""
-                    store_name = self._clean_store_name(store_name)
-                    
-                    # Filter invalid names
-                    if not store_name or len(store_name) < 2:
-                        continue
-                    if store_name in invalid_names:
-                        continue
-                    if not any(c.isalnum() for c in store_name):
-                        continue
-                    
-                    # Must look like a store name (usually contains these)
-                    if not any(x in store_name for x in ['店', '旗舰', '专卖', '官方', '专营']):
-                        # If doesn't have store keywords, must be at least 4 chars
-                        if len(store_name) < 4:
-                            continue
-                    
-                    # Normalize URL
-                    store_url = self._normalize_store_url(href)
-                    
-                    if not store_url or store_url in seen_urls:
-                        continue
-                    
-                    if store_name in seen_stores:
-                        continue
-                    
-                    seen_urls.add(store_url)
-                    seen_stores.add(store_name)
-                    
-                    share_text = f"【天猫店铺】{store_name} {store_url}"
-                    
-                    result = CrawlResult(
-                        platform=self.platform,
-                        content_type=ContentType.STORE,
-                        url=store_url,
-                        share_text=share_text,
-                        title="",
-                        account_id="",
-                        account_name="",
-                        store_name=store_name,
-                    )
-                    
-                    self._add_result(result)
-                    count += 1
-                    
-                except Exception as e:
-                    continue
-        
         print(f"Extracted {count} stores from this page")
         return count
     
     async def _scroll_page(self):
-        """Scroll page to load ALL content (49 items per page)"""
-        # Multiple selectors to count items
-        item_selectors = [
-            'a[href*="store.taobao.com/shop"]',
-            'a[href*=".tmall.com/"][href*="shop"]',
-            '[class*="Card"]',  # Product cards
-            '.content--content',  # Content items
-        ]
-        
-        prev_count = 0
-        max_scrolls = 20  # More scrolls to ensure all 49 items load
-        stable_count = 0  # Track how many times count stayed same
+        """Scroll page thoroughly to load ALL content (44-49 items per page)"""
+        prev_height = 0
+        max_scrolls = 30
+        stable_count = 0
         
         for i in range(max_scrolls):
-            # Scroll down with varying amounts
-            scroll_amount = 500 + (i % 3) * 200  # 500, 700, 900, 500, ...
+            scroll_amount = 400 + (i % 5) * 200
             await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.5)
             
-            # Count items using multiple selectors
-            current_count = 0
-            for selector in item_selectors:
-                try:
-                    items = await self._page.query_selector_all(selector)
-                    current_count = max(current_count, len(items))
-                except:
-                    continue
-            
-            if current_count == prev_count:
+            current_height = await self._page.evaluate('document.body.scrollHeight')
+            if current_height == prev_height:
                 stable_count += 1
-                if stable_count >= 3 and i > 8:
-                    # Count stable for 3 iterations after 8 scrolls
+                if stable_count >= 4 and i > 10:
                     break
             else:
                 stable_count = 0
-            
-            prev_count = current_count
+            prev_height = current_height
         
-        # Scroll to very bottom to trigger any remaining lazy loads
+        await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+        await asyncio.sleep(1.5)
+        
+        await self._page.evaluate('window.scrollBy(0, -500)')
+        await asyncio.sleep(0.5)
+        await self._page.evaluate('window.scrollBy(0, 800)')
+        await asyncio.sleep(0.8)
+        
         await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
         await asyncio.sleep(1)
         
-        # Scroll up a bit and down again to trigger more lazy loads
-        await self._page.evaluate('window.scrollBy(0, -300)')
-        await asyncio.sleep(0.3)
-        await self._page.evaluate('window.scrollBy(0, 500)')
-        await asyncio.sleep(0.5)
-        
-        # Scroll back to top for consistent behavior
         await self._page.evaluate('window.scrollTo(0, 0)')
         await asyncio.sleep(0.5)
         
-        # Final count
-        final_links = await self._page.query_selector_all('a[href*="store.taobao.com/shop"], a[href*=".tmall.com/"]')
-        print(f"After scrolling: {len(final_links)} shop/tmall links visible")
+        link_count = await self._page.evaluate('''() => {
+            return document.querySelectorAll('a[href*="store.taobao"], a[href*=".tmall.com"], a[href*="shop"]').length;
+        }''')
+        print(f"After scrolling: {link_count} store/shop links visible")
     
     async def _go_to_next_page(self, current_page_num: int) -> bool:
         """Go to next page using multiple methods for reliability"""
@@ -900,71 +828,87 @@ class TaobaoCrawler(BaseCrawler):
         page_num = 1
         seen_urls = set()
         max_pages = (max_results // 40) + 5
+        consecutive_empty = 0
         
         while collected < max_results and page_num <= max_pages and not self._cancelled:
+            await self._check_pause()
+            
             self._update_progress(
-                message=f"正在抓取第 {page_num} 页... (已获取 {collected} 个商品)"
+                message=f"📄 正在抓取第 {page_num} 页... (已获取 {collected} 个商品)"
             )
             
             await asyncio.sleep(2)
             await self._scroll_page()
             
-            # Find product links
-            product_links = await self._page.query_selector_all('a[href*="item.taobao"], a[href*="detail.tmall"]')
+            product_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const links = document.querySelectorAll('a[href*="item.taobao"], a[href*="detail.tmall"], a[href*="item.htm"]');
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    if (!href) continue;
+                    if (!href.includes('item.taobao') && !href.includes('detail.tmall') && !href.includes('item.htm')) continue;
+                    const cleanHref = href.split('&spm')[0].split('&scm')[0];
+                    if (seen.has(cleanHref)) continue;
+                    seen.add(cleanHref);
+                    let title = link.innerText.trim();
+                    if (!title || title.length < 2) {
+                        const parent = link.parentElement;
+                        if (parent) {
+                            const titleEl = parent.querySelector('[class*="title"], [class*="name"]');
+                            if (titleEl) title = titleEl.innerText.trim();
+                        }
+                    }
+                    let fullHref = href;
+                    if (href.startsWith('//')) fullHref = 'https:' + href;
+                    results.push({ href: fullHref, title: title || '' });
+                }
+                return results;
+            }''')
             
+            before_count = len(self.results)
             new_count = 0
-            for link in product_links:
+            for item in product_data:
                 if collected >= max_results or self._cancelled:
                     break
-                
                 try:
-                    href = await link.get_attribute('href')
-                    if not href or href in seen_urls:
+                    href = item.get('href', '')
+                    title = item.get('title', '').strip()[:100]
+                    if not href or href in seen_urls or not title:
                         continue
-                    
-                    if href.startswith('//'):
-                        href = 'https:' + href
-                    
                     seen_urls.add(href)
                     
-                    title = await link.inner_text()
-                    title = title.strip()[:100] if title else ""
-                    
-                    if not title:
-                        continue
-                    
                     share_text = f"【淘宝】{title} {href}"
-                    
                     result = CrawlResult(
-                        platform=self.platform,
-                        content_type=ContentType.PRODUCT,
-                        url=href,
-                        share_text=share_text,
-                        title=title,
-                        product_name=title,
+                        platform=self.platform, content_type=ContentType.PRODUCT,
+                        url=href, share_text=share_text,
+                        title=title, product_name=title,
                     )
-                    
                     self._add_result(result)
                     collected += 1
                     new_count += 1
-                    
                 except Exception as e:
                     print(f"提取商品信息失败: {e}")
                     continue
             
+            actual_new = len(self.results) - before_count
             self._update_progress(
-                current=collected,
-                total=max_results,
+                current=collected, total=max_results,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"已抓取 {collected}/{max_results} 个商品 (第{page_num}页)"
+                message=f"✓ 已抓取 {collected}/{max_results} 个商品 (第{page_num}页完成)"
             )
             
-            if new_count == 0 and page_num > 1:
-                break
+            if actual_new == 0:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    self._update_progress(message=f"连续{consecutive_empty}页无新商品，停止抓取")
+                    break
+            else:
+                consecutive_empty = 0
             
-            # Go to next page
             if collected < max_results:
                 has_next = await self._go_to_next_page(page_num)
                 if not has_next:
                     break
                 page_num += 1
+                await asyncio.sleep(2)

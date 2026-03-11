@@ -4,7 +4,6 @@ Kuaishou (快手) crawler for searching and extracting live streams and videos.
 
 import asyncio
 import re
-import hashlib
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -163,73 +162,128 @@ class KuaishouCrawler(BaseCrawler):
         
         collected = 0
         scroll_count = 0
-        max_scrolls = max(50, max_results // 10)
+        max_scrolls = max(150, max_results // 3)
         no_new_results_count = 0
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Find all live room links - look for various patterns
-            all_links = await self._page.query_selector_all('a')
+            await self._check_pause()
             
-            unique_hrefs = set()
-            for link in all_links:
-                href = await link.get_attribute('href')
-                if not href:
-                    continue
-                    
-                # Check for user profile links that could be live streams
-                # Pattern 1: /u/{user_id}
-                # Pattern 2: live.kuaishou.com/u/{user_id}
-                # Pattern 3: short-video/{id}
-                if '/u/' in href or 'live.kuaishou' in href:
-                    # Clean and normalize URL
-                    if href.startswith('/'):
-                        href = self.LIVE_URL + href
-                    elif href.startswith('//'):
-                        href = 'https:' + href
-                    unique_hrefs.add(href.split('?')[0])  # Remove query params
+            live_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const links = document.querySelectorAll('a');
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    let isLive = false;
+                    if (/\\/u\\/[^\\/?]+/.test(href)) isLive = true;
+                    else if (href.includes('live.kuaishou')) isLive = true;
+                    else if (/\\/live\\/[^\\/?]+/.test(href)) isLive = true;
+                    else if (/\\/profile\\/[^\\/?]+/.test(href)) isLive = true;
+                    if (isLive) {
+                        let cleanHref = href.split('?')[0];
+                        if (cleanHref.startsWith('/')) cleanHref = 'https://live.kuaishou.com' + cleanHref;
+                        else if (cleanHref.startsWith('//')) cleanHref = 'https:' + cleanHref;
+                        if (seen.has(cleanHref)) continue;
+                        seen.add(cleanHref);
+                        let parent = link.closest('[class*="card"]') || link.closest('[class*="Card"]') ||
+                                     link.closest('[class*="item"]') || link.closest('li') ||
+                                     link.parentElement?.parentElement?.parentElement;
+                        let parentText = '';
+                        try { parentText = parent ? parent.innerText : link.innerText; } catch(e) {}
+                        results.push({ href: cleanHref, parentText: parentText });
+                    }
+                }
+                return results;
+            }''')
             
             self._update_progress(
-                total=max_results,
-                current=collected,
+                total=max_results, current=collected,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"找到 {len(unique_hrefs)} 个直播间，已抓取 {collected} 个"
+                message=f"页面发现 {len(live_data)} 个直播间链接，已抓取 {collected} 个"
             )
             
             new_results_this_round = 0
-            for href in unique_hrefs:
+            for item in live_data:
                 if collected >= max_results or self._cancelled:
                     break
                 
-                if href in seen_urls:
+                href = item.get('href', '')
+                if not href or href in seen_urls:
                     continue
                 
                 try:
-                    result = await self._extract_live_info(href)
-                    if result:
-                        seen_urls.add(href)
-                        self._add_result(result)
-                        collected += 1
-                        new_results_this_round += 1
-                        self._update_progress(
-                            current=collected,
-                            percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                            message=f"已抓取 {collected}/{max_results} 个直播间"
-                        )
+                    match = re.search(r'/u/([^/?]+)', href)
+                    if not match:
+                        match = re.search(r'/(?:live|profile)/([^/?]+)', href)
+                    user_id = match.group(1) if match else ""
+                    if not user_id:
+                        continue
+                    
+                    seen_urls.add(href)
+                    
+                    parent_text = item.get('parentText', '')
+                    lines = [l.strip() for l in parent_text.split('\n') if l.strip() and len(l.strip()) > 1]
+                    skip_words = ['直播', '观看', '在线', '人', '万', '关注']
+                    text_lines = []
+                    for l in lines:
+                        clean = l.replace(',', '').replace('万', '').replace('人', '')
+                        if not clean.isdigit() and not any(w in l for w in skip_words):
+                            text_lines.append(l)
+                    
+                    account_name = ""
+                    title = ""
+                    if text_lines:
+                        for line in sorted(text_lines, key=len):
+                            if 2 < len(line) < 30:
+                                account_name = line
+                                break
+                        for line in text_lines:
+                            if line != account_name and len(line) > 5:
+                                title = line
+                                break
+                    
+                    display_name = account_name[:30] if account_name else f"快手号{user_id}"
+                    share_text = f"#快手直播#【{display_name}】正在直播，来和我一起支持Ta吧！复制下方链接，打开【快手】观看直播！ {href}"
+                    
+                    result = CrawlResult(
+                        platform=self.platform, content_type=ContentType.LIVE,
+                        url=href, share_text=share_text,
+                        title=title[:100] if title else "",
+                        account_id=user_id,
+                        account_name=account_name[:50] if account_name else "",
+                    )
+                    self._add_result(result)
+                    collected += 1
+                    new_results_this_round += 1
+                    self._update_progress(
+                        current=collected,
+                        percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                        message=f"已抓取 {collected}/{max_results} 个直播间"
+                    )
                 except Exception as e:
                     print(f"提取快手直播信息失败: {e}")
                     continue
             
             if new_results_this_round == 0:
                 no_new_results_count += 1
-                if no_new_results_count >= 8:
-                    self._update_progress(message="没有更多新结果了")
-                    break
+                if no_new_results_count >= 3:
+                    self._update_progress(message=f"滚动加载更多... (尝试 {no_new_results_count}/15)")
             else:
                 no_new_results_count = 0
             
-            await self._page.evaluate('window.scrollBy(0, 1000)')
-            await asyncio.sleep(2)
+            if no_new_results_count >= 15:
+                self._update_progress(message="没有更多新结果了")
+                break
+            
+            scroll_amount = 800 + (scroll_count % 4) * 300
+            await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+            await asyncio.sleep(2.5)
+            
+            if scroll_count % 5 == 4:
+                await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                await asyncio.sleep(2)
+            
             scroll_count += 1
     
     async def _extract_live_info(self, url: str) -> Optional[CrawlResult]:
@@ -310,122 +364,135 @@ class KuaishouCrawler(BaseCrawler):
             return None
     
     async def _crawl_videos(self, max_results: int, keyword: str):
-        """Crawl video results from kuaishou.com feed interface"""
+        """Crawl video results from kuaishou.com search - scroll+extract approach"""
         self._update_progress(message="正在抓取快手短视频...")
         
-        # Kuaishou uses a TikTok-style feed - need to extract from page state
         collected = 0
         scroll_count = 0
-        max_scrolls = max(max_results * 2, 50)  # May need multiple scrolls per video
+        max_scrolls = max(150, max_results // 3)
         no_new_results_count = 0
         seen_ids = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            try:
-                # Try to extract current video info from page
-                video_info = await self._extract_current_video()
-                
-                if video_info and video_info['id'] not in seen_ids:
-                    seen_ids.add(video_info['id'])
+            await self._check_pause()
+            
+            video_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const links = document.querySelectorAll('a[href*="/short-video/"], a[href*="/photo/"], a[href*="/video/"]');
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    const match = href.match(/\\/(?:short-video|photo|video)\\/([^\\/?]+)/);
+                    if (!match) continue;
+                    const videoId = match[1];
+                    if (seen.has(videoId)) continue;
+                    seen.add(videoId);
+                    let parent = link.closest('[class*="card"]') || link.closest('[class*="Card"]') ||
+                                 link.closest('[class*="item"]') || link.closest('[class*="feed"]') ||
+                                 link.closest('li') || link.parentElement?.parentElement?.parentElement;
+                    let parentText = '';
+                    try { parentText = parent ? parent.innerText : link.innerText; } catch(e) {}
+                    let fullHref = href;
+                    if (href.startsWith('/')) fullHref = 'https://www.kuaishou.com' + href;
+                    else if (href.startsWith('//')) fullHref = 'https:' + href;
+                    results.push({ href: fullHref, videoId: videoId, parentText: parentText });
+                }
+                // Also try extracting from URL if on a video page
+                const urlMatch = window.location.href.match(/\\/(?:short-video|photo)\\/([^\\/?]+)/);
+                if (urlMatch && !seen.has(urlMatch[1])) {
+                    let author = '', title = '';
+                    try {
+                        const ae = document.querySelector('[class*="author"], [class*="nickname"], [class*="name"]');
+                        if (ae) author = ae.innerText.replace('@', '').trim();
+                    } catch(e) {}
+                    try {
+                        const te = document.querySelector('[class*="caption"], [class*="desc"], [class*="title"]');
+                        if (te) title = te.innerText.trim();
+                    } catch(e) {}
+                    results.push({ href: window.location.href, videoId: urlMatch[1], parentText: author + '\\n' + title });
+                }
+                return results;
+            }''')
+            
+            self._update_progress(
+                total=max_results, current=collected,
+                percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                message=f"页面发现 {len(video_data)} 个视频，已抓取 {collected} 个"
+            )
+            
+            new_results_this_round = 0
+            for item in video_data:
+                if collected >= max_results or self._cancelled:
+                    break
+                try:
+                    video_id = item.get('videoId', '')
+                    url = item.get('href', '')
+                    if not video_id or video_id in seen_ids or not url:
+                        continue
+                    seen_ids.add(video_id)
                     
-                    # Build URL
-                    url = f"https://www.kuaishou.com/short-video/{video_info['id']}"
+                    parent_text = item.get('parentText', '')
+                    lines = [l.strip() for l in parent_text.split('\n') if l.strip() and len(l.strip()) > 1]
+                    skip_words = ['点赞', '评论', '分享', '关注', '万', '次播放', '转发', '观看']
+                    filtered = [l for l in lines
+                                if not any(w in l for w in skip_words)
+                                and not l.replace('.', '').replace('万', '').replace('w', '').isdigit()]
                     
-                    # Generate share text
-                    display_name = video_info.get('author', '')[:30] or f"视频{video_info['id'][:8]}"
-                    title = video_info.get('title', '')[:50] or '精彩视频'
-                    share_text = f"#快手短视频# 来看看【{display_name}】的精彩视频！ {title} {url}"
+                    author = ""
+                    title = ""
+                    if filtered:
+                        for line in filtered:
+                            if line.startswith('@'):
+                                author = line[1:]
+                                break
+                            elif not author and len(line) < 30:
+                                author = line
+                        sorted_by_len = sorted(filtered, key=len, reverse=True)
+                        if sorted_by_len:
+                            title = sorted_by_len[0]
+                            if title == author and len(sorted_by_len) > 1:
+                                title = sorted_by_len[1]
+                    
+                    display_name = author[:30] if author else f"视频{video_id[:8]}"
+                    title_text = title[:50] if title else '精彩视频'
+                    share_text = f"#快手短视频# 来看看【{display_name}】的精彩视频！ {title_text} {url}"
                     
                     result = CrawlResult(
-                        platform=self.platform,
-                        content_type=ContentType.VIDEO,
-                        url=url,
-                        share_text=share_text,
-                        title=video_info.get('title', '')[:100],
-                        account_id=video_info['id'],
-                        account_name=video_info.get('author', '')[:50],
+                        platform=self.platform, content_type=ContentType.VIDEO,
+                        url=url, share_text=share_text,
+                        title=title[:100] if title else "",
+                        account_id=video_id,
+                        account_name=author[:50] if author else "",
                     )
-                    
                     self._add_result(result)
                     collected += 1
-                    
+                    new_results_this_round += 1
                     self._update_progress(
-                        total=max_results,
                         current=collected,
                         percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
                         message=f"已抓取 {collected}/{max_results} 个短视频"
                     )
-                    
-                    no_new_results_count = 0
-                else:
-                    no_new_results_count += 1
-                    if no_new_results_count >= 15:
-                        self._update_progress(message="没有更多新视频了")
-                        break
-                
-                # Scroll down to next video (Kuaishou feed style)
-                await self._page.keyboard.press('ArrowDown')
-                await asyncio.sleep(1.5)
-                scroll_count += 1
-                
-            except Exception as e:
-                print(f"抓取视频失败: {e}")
+                except Exception as e:
+                    print(f"提取视频信息失败: {e}")
+                    continue
+            
+            if new_results_this_round == 0:
                 no_new_results_count += 1
-                await asyncio.sleep(1)
-                scroll_count += 1
-    
-    async def _extract_current_video(self) -> Optional[dict]:
-        """Extract info from currently displayed video"""
-        try:
-            # Get video info from page content
-            info = {}
-            
-            # Look for author name - typically has @ prefix
-            author_elem = await self._page.query_selector('[class*="author"], [class*="nickname"], [class*="name"]')
-            if author_elem:
-                author_text = await author_elem.inner_text()
-                info['author'] = author_text.replace('@', '').strip()[:50]
-            
-            # Look for video title/description
-            title_elem = await self._page.query_selector('[class*="caption"], [class*="desc"], [class*="title"]')
-            if title_elem:
-                title_text = await title_elem.inner_text()
-                info['title'] = title_text.strip()[:100]
-            
-            # Try to get video ID from URL or page content
-            current_url = self._page.url
-            match = re.search(r'/(?:short-video|photo)/([^/?]+)', current_url)
-            if match:
-                info['id'] = match.group(1)
+                if no_new_results_count >= 3:
+                    self._update_progress(message=f"滚动加载更多... (尝试 {no_new_results_count}/15)")
             else:
-                # Try extracting from page state via JavaScript
-                video_id = await self._page.evaluate('''() => {
-                    // Look for video ID in various places
-                    const url = window.location.href;
-                    let match = url.match(/\\/(?:short-video|photo)\\/([^\\/?]+)/);
-                    if (match) return match[1];
-                    
-                    // Try video element
-                    const video = document.querySelector('video');
-                    if (video && video.src) {
-                        match = video.src.match(/photoId=([^&]+)/);
-                        if (match) return match[1];
-                    }
-                    
-                    return null;
-                }''')
-                if video_id:
-                    info['id'] = video_id
+                no_new_results_count = 0
             
-            if not info.get('id'):
-                # Generate unique ID from content
-                import hashlib
-                content = (info.get('author', '') + info.get('title', ''))
-                if content:
-                    info['id'] = hashlib.md5(content.encode()).hexdigest()[:12]
+            if no_new_results_count >= 15:
+                self._update_progress(message="没有更多新视频了")
+                break
             
-            return info if info.get('id') else None
+            scroll_amount = 800 + (scroll_count % 4) * 300
+            await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+            await asyncio.sleep(2.5)
             
-        except Exception as e:
-            print(f"提取视频信息失败: {e}")
-            return None
+            if scroll_count % 5 == 4:
+                await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                await asyncio.sleep(2)
+            
+            scroll_count += 1

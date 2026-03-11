@@ -360,83 +360,124 @@ class DouyinCrawler(BaseCrawler):
         
         collected = 0
         scroll_count = 0
-        # Scale max_scrolls based on desired results (roughly 20-30 results per scroll)
-        max_scrolls = max(50, max_results // 10)  # Allow many more scrolls for large requests
+        max_scrolls = max(150, max_results // 3)
         no_new_results_count = 0
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Find all links that could be live streams
-            # On search page: look for live.douyin.com links or /live/ paths
-            all_links = await self._page.query_selector_all('a')
+            await self._check_pause()
             
-            live_links = []
-            for link in all_links:
-                href = await link.get_attribute('href')
-                if not href:
-                    continue
-                    
-                # Check for various live stream URL patterns
-                is_live = False
-                
-                # Pattern 1: https://live.douyin.com/{room_id}
-                if re.search(r'live\.douyin\.com/\d+', href):
-                    is_live = True
-                # Pattern 2: /live/{room_id} on main site
-                elif re.search(r'/live/\d+', href):
-                    is_live = True
-                # Pattern 3: webcast links
-                elif 'webcast' in href and re.search(r'\d{10,}', href):
-                    is_live = True
-                
-                if is_live:
-                    live_links.append(link)
+            live_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const links = document.querySelectorAll('a');
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    let isLive = false;
+                    if (/live\\.douyin\\.com\\/\\d+/.test(href)) isLive = true;
+                    else if (/\\/live\\/\\d+/.test(href)) isLive = true;
+                    else if (href.includes('webcast') && /\\d{10,}/.test(href)) isLive = true;
+                    if (isLive) {
+                        const cleanHref = href.split('?')[0];
+                        if (seen.has(cleanHref)) continue;
+                        seen.add(cleanHref);
+                        let parent = link.closest('[class*="Card"]') || link.closest('[class*="card"]') ||
+                                     link.closest('[class*="item"]') || link.closest('li') ||
+                                     link.parentElement?.parentElement?.parentElement;
+                        let parentText = '';
+                        try { parentText = parent ? parent.innerText : ''; } catch(e) {}
+                        results.push({ href: href, parentText: parentText });
+                    }
+                }
+                return results;
+            }''')
             
-            current_count = len(live_links)
             self._update_progress(
-                total=max_results,
-                current=collected,
+                total=max_results, current=collected,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"找到 {current_count} 个直播间，已抓取 {collected} 个"
+                message=f"页面发现 {len(live_data)} 个直播间链接，已抓取 {collected} 个"
             )
             
             new_results_this_round = 0
-            for link in live_links:
+            for item in live_data:
                 if collected >= max_results or self._cancelled:
                     break
-                
                 try:
-                    result = await self._extract_live_info_from_link(link)
-                    if result and result.url and result.url not in seen_urls:
-                        seen_urls.add(result.url)
-                        self._add_result(result)
-                        collected += 1
-                        new_results_this_round += 1
-                        self._update_progress(
-                            current=collected,
-                            percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                            message=f"已抓取 {collected}/{max_results} 个直播间"
-                        )
+                    href = item.get('href', '')
+                    if not href:
+                        continue
+                    url = href.split('?')[0]
+                    if not url.startswith('http'):
+                        url = 'https:' + url if url.startswith('//') else self.LIVE_URL + url
+                    if url in seen_urls:
+                        continue
+                    room_match = re.search(r'/(\d+)$', url)
+                    room_id = room_match.group(1) if room_match else ""
+                    if not room_id:
+                        continue
+                    seen_urls.add(url)
+                    
+                    parent_text = item.get('parentText', '')
+                    lines = [l.strip() for l in parent_text.split('\n') if l.strip() and len(l.strip()) > 1]
+                    skip_words = ['直播', '观看', '在线', '人正在', '万人', '点赞', '进入']
+                    text_lines = [l for l in lines
+                                  if not l.replace(',', '').replace('万', '').replace('人', '').isdigit()
+                                  and len(l) < 50
+                                  and not any(w in l for w in skip_words)]
+                    
+                    account_name = ""
+                    title = ""
+                    if text_lines:
+                        for line in text_lines:
+                            if len(line) < 30:
+                                account_name = line
+                                break
+                        for line in text_lines:
+                            if line != account_name and len(line) > 3:
+                                title = line
+                                break
+                    
+                    display_name = account_name[:30] if account_name else f"直播间{room_id}"
+                    share_text = f"#在抖音，记录美好生活#【{display_name}】正在直播，来和我一起支持Ta吧。复制下方链接，打开【抖音】，直接观看直播！ {url}"
+                    
+                    result = CrawlResult(
+                        platform=self.platform, content_type=ContentType.LIVE,
+                        url=url, share_text=share_text,
+                        title=title[:100] if title else "",
+                        account_id=room_id,
+                        account_name=account_name[:50] if account_name else "",
+                    )
+                    self._add_result(result)
+                    collected += 1
+                    new_results_this_round += 1
+                    self._update_progress(
+                        current=collected,
+                        percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                        message=f"已抓取 {collected}/{max_results} 个直播间"
+                    )
                 except Exception as e:
                     print(f"提取直播信息失败: {e}")
                     continue
             
-            # Check if we're getting new results
             if new_results_this_round == 0:
                 no_new_results_count += 1
                 if no_new_results_count >= 3:
-                    self._update_progress(message="滚动加载更多...")
+                    self._update_progress(message=f"滚动加载更多... (尝试 {no_new_results_count}/15)")
             else:
                 no_new_results_count = 0
             
-            # Stop if no more results after many scrolls
-            if no_new_results_count >= 8:
+            if no_new_results_count >= 15:
                 self._update_progress(message="没有更多新结果了")
                 break
             
-            # Scroll to load more
-            await self._page.evaluate('window.scrollBy(0, 1000)')
-            await asyncio.sleep(2)
+            scroll_amount = 800 + (scroll_count % 4) * 300
+            await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+            await asyncio.sleep(2.5)
+            
+            if scroll_count % 5 == 4:
+                await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                await asyncio.sleep(2)
+            
             scroll_count += 1
     
     async def _convert_to_app_share_links(self):
@@ -727,81 +768,123 @@ class DouyinCrawler(BaseCrawler):
         """Crawl video results"""
         self._update_progress(message="正在抓取短视频...")
         
-        # First check for CAPTCHA - this is common on Douyin search pages
         await self._check_and_handle_captcha()
-        
-        # Wait for content after CAPTCHA
         await asyncio.sleep(3)
         
         collected = 0
         scroll_count = 0
-        max_scrolls = max(50, max_results // 5)  # Scale scrolls based on max_results
+        max_scrolls = max(150, max_results // 3)
         no_new_results_count = 0
         seen_urls = set()
         
         while collected < max_results and scroll_count < max_scrolls and not self._cancelled:
-            # Check for CAPTCHA periodically
-            if scroll_count % 3 == 0:
+            await self._check_pause()
+            
+            if scroll_count % 5 == 0:
                 await self._check_and_handle_captcha()
             
-            # Find video cards using multiple strategies
-            cards = []
+            video_data = await self._page.evaluate('''() => {
+                const results = [];
+                const seen = new Set();
+                const links = document.querySelectorAll('a[href*="/video/"]');
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    const match = href.match(/\\/video\\/(\\d+)/);
+                    if (!match) continue;
+                    const videoId = match[1];
+                    if (seen.has(videoId)) continue;
+                    seen.add(videoId);
+                    let parent = link.closest('[data-e2e]') || link.closest('[class*="Card"]') ||
+                                 link.closest('[class*="card"]') || link.closest('[class*="item"]') ||
+                                 link.closest('li') || link.parentElement?.parentElement?.parentElement;
+                    let parentText = '';
+                    try { parentText = parent ? parent.innerText : link.innerText; } catch(e) {}
+                    let fullHref = href;
+                    if (href.startsWith('//')) fullHref = 'https:' + href;
+                    else if (href.startsWith('/')) fullHref = 'https://www.douyin.com' + href;
+                    results.push({ href: fullHref, videoId: videoId, parentText: parentText });
+                }
+                return results;
+            }''')
             
-            # Strategy 1: Find by data attribute
-            cards = await self._page.query_selector_all('[data-e2e*="video"]')
-            
-            # Strategy 2: Find all video links and get their parent containers
-            if not cards:
-                links = await self._page.query_selector_all('a[href*="/video/"]')
-                for link in links:
-                    parent = await link.evaluate_handle('el => el.closest("li") || el.closest("div")')
-                    if parent:
-                        cards.append(parent)
-            
-            # Strategy 3: Use XPath
-            if not cards:
-                cards = await self._page.query_selector_all('xpath=//li[.//a[contains(@href, "/video/")]]')
-            
-            current_count = len(cards)
             self._update_progress(
-                total=max_results,
-                current=collected,
+                total=max_results, current=collected,
                 percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
-                message=f"找到 {current_count} 个视频，已抓取 {collected} 个"
+                message=f"页面发现 {len(video_data)} 个视频，已抓取 {collected} 个"
             )
             
             new_results_this_round = 0
-            for card in cards:
+            for item in video_data:
                 if collected >= max_results or self._cancelled:
                     break
-                
                 try:
-                    result = await self._extract_video_info(card)
-                    if result and result.url and result.url not in seen_urls:
-                        seen_urls.add(result.url)
-                        self._add_result(result)
-                        collected += 1
-                        new_results_this_round += 1
-                        self._update_progress(
-                            current=collected,
-                            percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0
-                        )
+                    url = item.get('href', '')
+                    video_id = item.get('videoId', '')
+                    if not url or url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    
+                    parent_text = item.get('parentText', '')
+                    lines = [l.strip() for l in parent_text.split('\n') if l.strip() and len(l.strip()) > 1]
+                    skip_words = ['点赞', '评论', '收藏', '分享', '关注', '万', '次播放', '转发']
+                    filtered = [l for l in lines
+                                if not any(w in l.lower() for w in skip_words)
+                                and not l.replace('.', '').replace('万', '').replace('w', '').isdigit()]
+                    
+                    title = ""
+                    account_name = ""
+                    if filtered:
+                        sorted_by_len = sorted(filtered, key=len, reverse=True)
+                        title = sorted_by_len[0] if sorted_by_len else ""
+                        for line in filtered:
+                            if line.startswith('@'):
+                                account_name = line[1:]
+                                break
+                            elif line != title and len(line) < 30:
+                                account_name = line
+                    
+                    title = title[:150] if title else ""
+                    account_name = account_name[:50] if account_name else ""
+                    display_name = account_name if account_name else f"视频{video_id}"
+                    share_text = f"#在抖音，记录美好生活# {title if title else '精彩视频'} {url}"
+                    
+                    result = CrawlResult(
+                        platform=self.platform, content_type=ContentType.VIDEO,
+                        url=url, share_text=share_text,
+                        title=title.strip(), account_id=video_id,
+                        account_name=account_name.strip(),
+                    )
+                    self._add_result(result)
+                    collected += 1
+                    new_results_this_round += 1
+                    self._update_progress(
+                        current=collected,
+                        percentage=min(95, int(collected / max_results * 100)) if max_results > 0 else 0,
+                        message=f"已抓取 {collected}/{max_results} 个短视频"
+                    )
                 except Exception as e:
                     print(f"提取视频信息失败: {e}")
                     continue
             
-            # Check if we're getting new results
             if new_results_this_round == 0:
                 no_new_results_count += 1
-                if no_new_results_count >= 5:
-                    self._update_progress(message="没有更多新结果了")
-                    break
+                if no_new_results_count >= 3:
+                    self._update_progress(message=f"滚动加载更多... (尝试 {no_new_results_count}/12)")
             else:
                 no_new_results_count = 0
             
-            # Scroll to load more
-            await self._page.evaluate('window.scrollBy(0, 800)')
-            await asyncio.sleep(2)
+            if no_new_results_count >= 12:
+                self._update_progress(message="没有更多新结果了")
+                break
+            
+            scroll_amount = 600 + (scroll_count % 4) * 300
+            await self._page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+            await asyncio.sleep(2.5)
+            
+            if scroll_count % 5 == 4:
+                await self._page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                await asyncio.sleep(2)
+            
             scroll_count += 1
     
     async def _extract_video_info(self, card) -> Optional[CrawlResult]:

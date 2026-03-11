@@ -664,11 +664,18 @@ class MainWindow(QMainWindow):
         self.results_table.insertRow(row)
         
         self.results_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-        self.results_table.setItem(row, 1, QTableWidgetItem(result.share_text))  # APP分享文本
+        self.results_table.setItem(row, 1, QTableWidgetItem(result.share_text))
         self.results_table.setItem(row, 2, QTableWidgetItem(result.url))
-        self.results_table.setItem(row, 3, QTableWidgetItem(result.account_id))
-        self.results_table.setItem(row, 4, QTableWidgetItem(result.account_name))
-        self.results_table.setItem(row, 5, QTableWidgetItem(result.title))
+        
+        # For stores/products, show store_name/product_name in the ID/Name columns
+        if result.content_type in (ContentType.STORE, ContentType.PRODUCT):
+            self.results_table.setItem(row, 3, QTableWidgetItem(result.store_name or result.product_name))
+            self.results_table.setItem(row, 4, QTableWidgetItem(result.price if result.price else result.store_name))
+        else:
+            self.results_table.setItem(row, 3, QTableWidgetItem(result.account_id))
+            self.results_table.setItem(row, 4, QTableWidgetItem(result.account_name))
+        
+        self.results_table.setItem(row, 5, QTableWidgetItem(result.title or result.product_name or result.store_name))
         self.results_table.setItem(row, 6, QTableWidgetItem(result.crawled_at))
     
     def on_crawl_finished(self):

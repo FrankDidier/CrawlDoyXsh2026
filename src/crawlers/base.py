@@ -114,6 +114,7 @@ class BaseCrawler:
         self.results: List[CrawlResult] = []
         self.progress = CrawlProgress()
         self._cancelled = False
+        self._paused = False
         self._progress_callback: Optional[Callable[[CrawlProgress], None]] = None
         self._result_callback: Optional[Callable[[CrawlResult], None]] = None
     
