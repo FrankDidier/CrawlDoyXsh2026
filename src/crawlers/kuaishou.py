@@ -182,8 +182,8 @@ class KuaishouCrawler(BaseCrawler):
                     else if (/\\/profile\\/[^\\/?]+/.test(href)) isLive = true;
                     if (isLive) {
                         let cleanHref = href.split('?')[0];
-                        if (cleanHref.startsWith('/')) cleanHref = 'https://live.kuaishou.com' + cleanHref;
-                        else if (cleanHref.startsWith('//')) cleanHref = 'https:' + cleanHref;
+                        if (cleanHref.startsWith('//')) cleanHref = 'https:' + cleanHref;
+                        else if (cleanHref.startsWith('/')) cleanHref = 'https://live.kuaishou.com' + cleanHref;
                         if (seen.has(cleanHref)) continue;
                         seen.add(cleanHref);
                         let parent = link.closest('[class*="card"]') || link.closest('[class*="Card"]') ||
@@ -393,8 +393,8 @@ class KuaishouCrawler(BaseCrawler):
                     let parentText = '';
                     try { parentText = parent ? parent.innerText : link.innerText; } catch(e) {}
                     let fullHref = href;
-                    if (href.startsWith('/')) fullHref = 'https://www.kuaishou.com' + href;
-                    else if (href.startsWith('//')) fullHref = 'https:' + href;
+                    if (href.startsWith('//')) fullHref = 'https:' + href;
+                    else if (href.startsWith('/')) fullHref = 'https://www.kuaishou.com' + href;
                     results.push({ href: fullHref, videoId: videoId, parentText: parentText });
                 }
                 // Also try extracting from URL if on a video page
