@@ -281,24 +281,42 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     Returns: (context, page, browser) tuple
     """
     user_data_dir = get_user_data_dir()
+    
+    # 一次性清理旧的不安全浏览器配置 (v2.1升级)
+    # 旧版本使用了 --ignore-certificate-errors 等参数，导致浏览器显示"不安全"
+    marker_file = os.path.join(user_data_dir, '.v2_security_fix')
+    if os.path.exists(user_data_dir) and not os.path.exists(marker_file):
+        import shutil
+        try:
+            shutil.rmtree(user_data_dir)
+            print("✓ 已清理旧版浏览器配置（修复安全警告）")
+        except Exception:
+            pass
+    
     os.makedirs(user_data_dir, exist_ok=True)
+    
+    # 写入标记文件，防止下次再清理
+    try:
+        with open(marker_file, 'w') as f:
+            f.write('security_fix_applied')
+    except Exception:
+        pass
     
     errors = []
     
-    # Common launch arguments - 增强反检测
+    # Common launch arguments - 反检测但不破坏安全性
+    # 注意: 不要使用 --disable-web-security, --ignore-certificate-errors, 
+    # --allow-running-insecure-content，否则浏览器会显示"不安全"
     common_args = [
         '--disable-blink-features=AutomationControlled',
-        '--disable-automation',
         '--disable-infobars',
         '--no-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-web-security',
-        '--ignore-certificate-errors',
-        '--allow-running-insecure-content',
-        # 隐藏自动化提示栏
-        '--disable-features=AutomationControlled',
-        '--excludeSwitches=enable-automation',
-        '--useAutomationExtension=false',
+        '--disable-features=AutomationControlled,EnableAutomation',
+        '--disable-extensions',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-popup-blocking',
     ]
     
     # Determine browser order based on user selection
@@ -339,8 +357,8 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     else:
         browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
     
-    # 真实的用户代理 (模拟普通Windows用户)
-    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    # 真实的用户代理 (模拟普通Windows用户 - 使用较新版本)
+    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
     
     # Try browsers in order
     for name, channel in browsers_to_try:
@@ -363,20 +381,9 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
                 locale='zh-CN',
                 args=common_args,
                 user_agent=user_agent,
-                # 额外的反检测设置
-                ignore_https_errors=True,
                 java_script_enabled=True,
-                bypass_csp=True,  # 绕过内容安全策略
                 extra_http_headers={
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
                 },
             )
             page = context.pages[0] if context.pages else await context.new_page()
@@ -395,7 +402,7 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
         )
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             locale='zh-CN',
         )
         page = await context.new_page()

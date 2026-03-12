@@ -75,29 +75,14 @@ class JDCrawler(BaseCrawler):
         except Exception as e:
             raise RuntimeError(f"启动浏览器失败: {e}")
         
-        # 添加多层反检测脚本
         await self._page.add_init_script("""
-            // 1. 隐藏 webdriver 标识
             Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-                configurable: true
+                get: () => undefined, configurable: true
             });
-            
-            // 2. 覆盖 navigator.plugins
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
-            });
-            
-            // 3. 覆盖 chrome 对象
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-            
-            // 4. 删除自动化属性
             delete navigator.__proto__.webdriver;
+            if (!window.chrome) {
+                window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            }
         """)
     
     async def _close_browser(self):

@@ -80,8 +80,10 @@ class DouyinCrawler(BaseCrawler):
         
         # Additional anti-detection
         await self._page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined, configurable: true
+            });
+            delete navigator.__proto__.webdriver;
         """)
     
     async def _close_browser(self):

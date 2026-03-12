@@ -80,51 +80,16 @@ class TaobaoCrawler(BaseCrawler):
         except Exception as e:
             raise RuntimeError(f"启动浏览器失败: {e}")
         
-        # 添加多层反检测脚本
         await self._page.add_init_script("""
-            // 1. 隐藏 webdriver 标识
             Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-                configurable: true
+                get: () => undefined, configurable: true
             });
-            
-            // 2. 覆盖 navigator.plugins (让它看起来像真实浏览器)
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
-            });
-            
-            // 3. 覆盖 navigator.languages
+            delete navigator.__proto__.webdriver;
+            if (!window.chrome) {
+                window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            }
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['zh-CN', 'zh', 'en']
-            });
-            
-            // 4. 覆盖 chrome 对象
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-            
-            // 5. 覆盖权限查询
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-            
-            // 6. 删除自动化相关属性
-            delete navigator.__proto__.webdriver;
-            
-            // 7. 模拟真实的 Connection 对象
-            Object.defineProperty(navigator, 'connection', {
-                get: () => ({
-                    effectiveType: '4g',
-                    rtt: 100,
-                    downlink: 10,
-                    saveData: false
-                })
             });
         """)
     
