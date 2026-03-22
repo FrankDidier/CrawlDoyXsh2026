@@ -8,6 +8,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 from .base import BaseCrawler, CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
+from ..utils.crawl_helpers import page_has_go_signal
 
 # Try to import playwright
 try:
@@ -88,6 +89,13 @@ class KuaishouCrawler(BaseCrawler):
         try:
             await self._init_browser(headless=False, browser_type=browser_type)
             
+            self._update_progress(message="正在打开快手首页...")
+            try:
+                await self._page.goto(self.BASE_URL, wait_until='domcontentloaded', timeout=30000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+            
             # Use kuaishou.com search with keyword
             if content_type == ContentType.LIVE:
                 url = self.SEARCH_LIVE_URL.format(keyword=quote(keyword))
@@ -96,33 +104,31 @@ class KuaishouCrawler(BaseCrawler):
                 url = self.SEARCH_VIDEO_URL.format(keyword=quote(keyword))
                 self._update_progress(message=f"正在搜索快手短视频: {keyword}...")
             
-            await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            await asyncio.sleep(5)  # Wait for content to load
+            await self._page.goto(url, wait_until='domcontentloaded', timeout=90000)
+            try:
+                await self._page.wait_for_load_state('networkidle', timeout=25000)
+            except Exception:
+                pass
+            await asyncio.sleep(4)
             
-            # Wait for user confirmation - allows them to handle login/CAPTCHA
-            # and ensure search results are loaded
             self._update_progress(
                 status=CrawlStatus.WAITING,
-                message="⏸️ 请确认搜索结果已加载，然后在浏览器地址栏末尾加上 #go 后按回车键继续抓取..."
+                message="⏸️ 请登录/加载结果后，地址栏加 #go 回车；或等待自动开始（约3分钟）"
             )
             
-            # Wait for user confirmation (add #go to URL)
-            max_wait = 120  # 2 minutes timeout
+            max_wait = 180
             waited = 0
             while waited < max_wait and not self._cancelled:
                 await asyncio.sleep(2)
                 waited += 2
-                
-                current_url = self._page.url
-                if '#go' in current_url:
+                if await page_has_go_signal(self._page):
                     self._update_progress(message="✓ 用户确认，开始抓取...")
                     await asyncio.sleep(1)
                     break
-                
                 if waited % 10 == 0:
                     self._update_progress(
                         status=CrawlStatus.WAITING,
-                        message=f"⏸️ 等待确认... 请在地址栏加上 #go 后按回车 ({max_wait - waited}秒后自动继续)"
+                        message=f"⏸️ 可加 #go 立即开始，或等待自动继续 ({max_wait - waited}秒)"
                     )
             
             self._update_progress(message="正在加载内容...")
@@ -172,18 +178,21 @@ class KuaishouCrawler(BaseCrawler):
             live_data = await self._page.evaluate('''() => {
                 const results = [];
                 const seen = new Set();
-                const links = document.querySelectorAll('a');
+                const links = document.querySelectorAll('a[href]');
                 for (const link of links) {
                     const href = link.getAttribute('href') || '';
                     let isLive = false;
                     if (/\\/u\\/[^\\/?]+/.test(href)) isLive = true;
-                    else if (href.includes('live.kuaishou')) isLive = true;
-                    else if (/\\/live\\/[^\\/?]+/.test(href)) isLive = true;
                     else if (/\\/profile\\/[^\\/?]+/.test(href)) isLive = true;
+                    else if (/\\/live\\/[^\\/?]+/.test(href)) isLive = true;
+                    else if (/live\\.kuaishou\\.com\\/u\\//i.test(href)) isLive = true;
+                    else if (/live\\.kuaishou\\.com\\/l\\//i.test(href)) isLive = true;
+                    else if (href.includes('live.kuaishou') && /\\/(u|profile|live)\\//.test(href)) isLive = true;
                     if (isLive) {
                         let cleanHref = href.split('?')[0];
                         if (cleanHref.startsWith('//')) cleanHref = 'https:' + cleanHref;
-                        else if (cleanHref.startsWith('/')) cleanHref = 'https://live.kuaishou.com' + cleanHref;
+                        else if (cleanHref.startsWith('/')) cleanHref = 'https://www.kuaishou.com' + cleanHref;
+                        if (/^https?:\\/\\/live\\.kuaishou\\.com\\/?$/i.test(cleanHref)) continue;
                         if (seen.has(cleanHref)) continue;
                         seen.add(cleanHref);
                         let parent = link.closest('[class*="card"]') || link.closest('[class*="Card"]') ||
@@ -215,7 +224,9 @@ class KuaishouCrawler(BaseCrawler):
                 try:
                     match = re.search(r'/u/([^/?]+)', href)
                     if not match:
-                        match = re.search(r'/(?:live|profile)/([^/?]+)', href)
+                        match = re.search(r'/(?:live|profile|l)/([^/?]+)', href)
+                    if not match:
+                        match = re.search(r'live\.kuaishou\.com/[^/]+/([^/?]+)', href)
                     user_id = match.group(1) if match else ""
                     if not user_id:
                         continue
@@ -379,12 +390,13 @@ class KuaishouCrawler(BaseCrawler):
             video_data = await self._page.evaluate('''() => {
                 const results = [];
                 const seen = new Set();
-                const links = document.querySelectorAll('a[href*="/short-video/"], a[href*="/photo/"], a[href*="/video/"]');
+                const links = document.querySelectorAll('a[href]');
                 for (const link of links) {
                     const href = link.getAttribute('href') || '';
-                    const match = href.match(/\\/(?:short-video|photo|video)\\/([^\\/?]+)/);
-                    if (!match) continue;
-                    const videoId = match[1];
+                    let m = href.match(/\\/(?:short-video|photo|video)\\/([^\\/?]+)/);
+                    if (!m) m = href.match(/\\/fw\\/photo\\/([^\\/?]+)/);
+                    if (!m) continue;
+                    const videoId = m[1];
                     if (seen.has(videoId)) continue;
                     seen.add(videoId);
                     let parent = link.closest('[class*="card"]') || link.closest('[class*="Card"]') ||

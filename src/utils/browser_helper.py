@@ -357,8 +357,17 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     else:
         browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
     
-    # 真实的用户代理 (模拟普通Windows用户 - 使用较新版本)
-    user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    # 与系统一致的用户代理（Mac 上用 Mac UA，减少指纹异常）
+    if sys.platform == 'darwin':
+        user_agent = (
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        )
+    else:
+        user_agent = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        )
     
     # Try browsers in order
     for name, channel in browsers_to_try:
@@ -400,9 +409,14 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
             headless=headless,
             args=common_args
         )
+        fallback_ua = (
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            if sys.platform == 'darwin'
+            else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        )
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            user_agent=fallback_ua,
             locale='zh-CN',
         )
         page = await context.new_page()

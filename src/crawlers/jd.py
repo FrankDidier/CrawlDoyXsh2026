@@ -9,6 +9,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 from .base import BaseCrawler, CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
+from ..utils.crawl_helpers import page_has_go_signal
 
 # Try to import playwright
 try:
@@ -153,14 +154,17 @@ class JDCrawler(BaseCrawler):
                 message="⏸️ 请在浏览器中设置筛选条件\n📌 完成后在浏览器地址栏末尾添加 #go 然后按回车开始抓取\n⏳ 或等待60秒后自动开始..."
             )
             
-            # Wait for user signal or timeout
-            for i in range(60):
+            for i in range(90):
                 await asyncio.sleep(1)
-                current_url = self._page.url
-                if '#go' in current_url:
-                    clean_url = current_url.replace('#go', '')
-                    await self._page.goto(clean_url, wait_until='domcontentloaded')
-                    await asyncio.sleep(2)
+                if await page_has_go_signal(self._page):
+                    clean_url = await self._page.evaluate(
+                        """() => window.location.href.split('#')[0]"""
+                    )
+                    try:
+                        await self._page.goto(clean_url, wait_until='domcontentloaded', timeout=60000)
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
                     break
                 if self._cancelled:
                     return self.results

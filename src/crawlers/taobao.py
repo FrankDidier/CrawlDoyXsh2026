@@ -10,6 +10,7 @@ from typing import List, Optional
 from urllib.parse import quote, urlparse, parse_qs
 
 from .base import BaseCrawler, CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
+from ..utils.crawl_helpers import page_has_go_signal
 
 # Try to import playwright
 try:
@@ -256,9 +257,13 @@ class TaobaoCrawler(BaseCrawler):
             # 模拟鼠标移动（人类行为）
             await self._simulate_human_behavior()
             
-            # Taobao search URL - 使用 s=0 表示从第1个商品开始 (每页约44个)
-            url = f"{self.SEARCH_URL}?q={quote(keyword)}&s=0"
-            self._update_progress(message="正在打开淘宝搜索页面...")
+            # 店铺搜索用 tab=shop，商品搜索用默认（商品列表）
+            if content_type == ContentType.STORE:
+                url = f"{self.SEARCH_URL}?q={quote(keyword)}&tab=shop&s=0"
+                self._update_progress(message="正在打开淘宝店铺搜索页面...")
+            else:
+                url = f"{self.SEARCH_URL}?q={quote(keyword)}&s=0"
+                self._update_progress(message="正在打开淘宝商品搜索页面...")
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
             await asyncio.sleep(3)
@@ -275,15 +280,21 @@ class TaobaoCrawler(BaseCrawler):
                 message="⏸️ 请在浏览器中设置筛选条件\n📌 完成后在浏览器地址栏末尾添加 #go 然后按回车开始抓取\n⏳ 或等待60秒后自动开始..."
             )
             
-            # Wait for user signal or timeout
-            for i in range(60):
+            # Wait for user signal or timeout（用 location 检测 #go，避免 SPA 下 page.url 无 hash）
+            for i in range(90):
                 await asyncio.sleep(1)
-                current_url = self._page.url
-                if '#go' in current_url:
-                    # User signaled ready, remove the #go from URL
-                    clean_url = current_url.replace('#go', '')
-                    await self._page.goto(clean_url, wait_until='domcontentloaded')
-                    await asyncio.sleep(2)
+                if await page_has_go_signal(self._page):
+                    clean_url = await self._page.evaluate(
+                        """() => {
+                            const u = window.location.href.split('#')[0];
+                            return u;
+                        }"""
+                    )
+                    try:
+                        await self._page.goto(clean_url, wait_until='domcontentloaded', timeout=60000)
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
                     break
                 if self._cancelled:
                     return self.results

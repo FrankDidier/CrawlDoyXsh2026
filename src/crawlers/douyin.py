@@ -10,6 +10,7 @@ from typing import List, Optional, Callable
 from urllib.parse import quote
 
 from .base import BaseCrawler, CrawlResult, CrawlProgress, CrawlStatus, Platform, ContentType
+from ..utils.crawl_helpers import page_has_go_signal
 
 # Try to import playwright
 try:
@@ -262,6 +263,14 @@ class DouyinCrawler(BaseCrawler):
             # Always use non-headless for CAPTCHA handling
             await self._init_browser(headless=False, browser_type=browser_type)
             
+            # 先打开首页再搜索，更接近真人，降低风控
+            self._update_progress(message="正在打开抖音首页...")
+            try:
+                await self._page.goto(self.BASE_URL, wait_until='domcontentloaded', timeout=30000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+            
             # Both live and video use the main douyin.com search with different type parameter
             search_type = self.TYPE_MAP[content_type]
             url = self.SEARCH_URL.format(
@@ -271,10 +280,14 @@ class DouyinCrawler(BaseCrawler):
             self._update_progress(message=f"正在搜索: {keyword} (类型: {content_type.value})...")
             
             # Navigate to page
-            await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            await self._page.goto(url, wait_until='domcontentloaded', timeout=90000)
+            try:
+                await self._page.wait_for_load_state('networkidle', timeout=25000)
+            except Exception:
+                pass
             
             # Wait for initial load
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             
             # Check for CAPTCHA
             await self._check_and_handle_captcha()
@@ -295,26 +308,23 @@ class DouyinCrawler(BaseCrawler):
             # and ensure search results are loaded
             self._update_progress(
                 status=CrawlStatus.WAITING,
-                message="⏸️ 请确认搜索结果已加载，然后在浏览器地址栏末尾加上 #go 后按回车键继续抓取..."
+                message="⏸️ 请登录/验证后确认结果已显示，在地址栏末尾加 #go 回车；或等待自动开始（约3分钟）"
             )
             
-            # Wait for user confirmation (add #go to URL)
-            max_wait = 120  # 2 minutes timeout
+            # 使用 window.location 检测 #go（部分 SPA 下 page.url 不含 hash）
+            max_wait = 180
             waited = 0
             while waited < max_wait and not self._cancelled:
                 await asyncio.sleep(2)
                 waited += 2
-                
-                current_url = self._page.url
-                if '#go' in current_url:
+                if await page_has_go_signal(self._page):
                     self._update_progress(message="✓ 用户确认，开始抓取...")
                     await asyncio.sleep(1)
                     break
-                
                 if waited % 10 == 0:
                     self._update_progress(
                         status=CrawlStatus.WAITING,
-                        message=f"⏸️ 等待确认... 请在地址栏加上 #go 后按回车 ({max_wait - waited}秒后自动继续)"
+                        message=f"⏸️ 可加 #go 立即开始，或等待自动继续 ({max_wait - waited}秒)"
                     )
             
             self._update_progress(message="正在加载搜索结果...")
@@ -372,13 +382,17 @@ class DouyinCrawler(BaseCrawler):
             live_data = await self._page.evaluate('''() => {
                 const results = [];
                 const seen = new Set();
-                const links = document.querySelectorAll('a');
+                const links = document.querySelectorAll('a[href]');
                 for (const link of links) {
-                    const href = link.getAttribute('href') || '';
+                    let href = link.getAttribute('href') || '';
+                    if (!href) continue;
+                    if (href.startsWith('//')) href = 'https:' + href;
                     let isLive = false;
-                    if (/live\\.douyin\\.com\\/\\d+/.test(href)) isLive = true;
+                    if (/live\\.douyin\\.com\\/\\d+/i.test(href)) isLive = true;
                     else if (/\\/live\\/\\d+/.test(href)) isLive = true;
-                    else if (href.includes('webcast') && /\\d{10,}/.test(href)) isLive = true;
+                    else if (/douyin\\.com\\/live\\//i.test(href)) isLive = true;
+                    else if (href.includes('webcast') && /\\d{8,}/.test(href)) isLive = true;
+                    else if (/live\\.amemv\\.com/i.test(href)) isLive = true;
                     if (isLive) {
                         const cleanHref = href.split('?')[0];
                         if (seen.has(cleanHref)) continue;
@@ -788,9 +802,10 @@ class DouyinCrawler(BaseCrawler):
             video_data = await self._page.evaluate('''() => {
                 const results = [];
                 const seen = new Set();
-                const links = document.querySelectorAll('a[href*="/video/"]');
+                const links = document.querySelectorAll('a[href]');
                 for (const link of links) {
-                    const href = link.getAttribute('href') || '';
+                    let href = link.getAttribute('href') || '';
+                    if (!href) continue;
                     const match = href.match(/\\/video\\/(\\d+)/);
                     if (!match) continue;
                     const videoId = match[1];
