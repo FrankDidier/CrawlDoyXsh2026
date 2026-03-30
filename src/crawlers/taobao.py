@@ -4,6 +4,7 @@ Web version - keeps browser open to maintain login session.
 """
 
 import asyncio
+import random
 import re
 import os
 from typing import List, Optional
@@ -247,7 +248,7 @@ class TaobaoCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            await self._init_browser(headless=False, browser_type=browser_type)  # Always visible for Taobao
+            await self._init_browser(headless=headless, browser_type=browser_type)
             
             # 先访问淘宝首页，模拟真实用户行为
             self._update_progress(message="正在打开淘宝首页...")
@@ -267,6 +268,15 @@ class TaobaoCrawler(BaseCrawler):
             
             await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
             await asyncio.sleep(3)
+            
+            if await self._taobao_page_is_waf_blocked():
+                self._update_progress(message="检测到淘宝风控页，回首页等待后重进搜索（第2次尝试）...")
+                await self._page.goto("https://www.taobao.com", wait_until='domcontentloaded', timeout=30000)
+                await asyncio.sleep(random.uniform(4, 7))
+                await self._simulate_human_behavior()
+                await asyncio.sleep(1.5)
+                await self._page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                await asyncio.sleep(4)
             
             # 检测是否被反爬虫拦截
             await self._check_and_handle_block()
@@ -333,10 +343,23 @@ class TaobaoCrawler(BaseCrawler):
         
         return self.results
     
+    async def _taobao_page_is_waf_blocked(self) -> bool:
+        """检测是否为淘宝 punish / JSON 拦截页（非完整 HTML 搜索结果）"""
+        try:
+            html = await self._page.content()
+            u = self._page.url or ''
+            if len(html) < 1500 and ('rgv587' in html or 'punish' in html or 'deny' in html):
+                return True
+            if 'rgv587_flag' in html or 'punish/deny' in html or 'punish?' in u:
+                return True
+            if html.strip().startswith('{') and 'punish' in html[:500]:
+                return True
+        except Exception:
+            pass
+        return False
+    
     async def _simulate_human_behavior(self):
         """模拟人类行为 - 随机鼠标移动和滚动"""
-        import random
-        
         try:
             # 随机移动鼠标
             for _ in range(3):

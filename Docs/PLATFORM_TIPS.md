@@ -4,10 +4,17 @@
 
 ## 通用
 
-1. 使用 **本机已安装的 Chrome**，先在本机 Chrome 里登录一次淘宝/京东（如需要）。
-2. 程序会打开**独立配置目录**的浏览器窗口，与日常 Chrome **不是同一套 Cookie**。请在**程序弹出的窗口里**完成登录、验证码。
+1. 使用 **本机已安装的 Chrome**。默认程序使用**独立用户数据目录**（`~/.crawler_browser_profile`），与日常 Chrome **不是同一套 Cookie**，需在弹出窗口里重新登录。
+2. **（推荐淘宝/京东难登录时）** 使用 CDP 连接你已登录的 Chrome：
+   - 终端启动专用实例（示例）：
+     - macOS: `/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/crawler-chrome-profile`
+   - 在**该窗口**里打开并登录淘宝/京东。
+   - 运行程序前执行：`export CRAWLER_CHROME_DEBUG_PORT=9222`
+   - 再启动本应用；将直接复用该浏览器的 Cookie。
 3. 出现 **#go** 提示时：在地址栏**末尾**输入 `#go` 再回车，可立即开始抓取；不加则会**自动倒计时**后继续。
 4. **抖音 / 快手** 网页搜索常要求登录或人机验证，若结果为 0：换关键词、或用手机 App 分享链接到剪贴板（若程序支持解析）。
+
+**实测参考（有界面 Chrome + 上述 stealth 修复）：** 在未登录、新配置下，**快手直播搜索**可检测到有效链接；**抖音**常为「验证码中间页」需人工通过；**淘宝**易被 rgv587 拦截，建议 CDP 或滑块后重试；**京东**常要求登录。
 
 ## 淘宝（推荐优先测）
 

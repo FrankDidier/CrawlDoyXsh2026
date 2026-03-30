@@ -260,8 +260,7 @@ class DouyinCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            # Always use non-headless for CAPTCHA handling
-            await self._init_browser(headless=False, browser_type=browser_type)
+            await self._init_browser(headless=headless, browser_type=browser_type)
             
             # 先打开首页再搜索，更接近真人，降低风控
             self._update_progress(message="正在打开抖音首页...")

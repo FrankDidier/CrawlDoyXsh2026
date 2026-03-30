@@ -75,6 +75,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# Local live probe output
+live_report.json
+
 # Project specific
 *.jpg
 *.png

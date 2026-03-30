@@ -9,12 +9,14 @@ import sys
 import subprocess
 from typing import Optional, Tuple
 
-# Try to import playwright-stealth
+# playwright-stealth 2.x: Stealth.apply_stealth_async（旧版 stealth_async 已移除）
 try:
-    from playwright_stealth import stealth_async
+    from playwright_stealth import Stealth as _StealthCls
+
     HAS_STEALTH = True
 except ImportError:
     HAS_STEALTH = False
+    _StealthCls = None
     print("提示: 安装 playwright-stealth 可以更好地绕过反爬虫检测")
     print("运行: pip install playwright-stealth")
 
@@ -228,13 +230,21 @@ def get_user_data_dir() -> str:
 
 
 async def apply_stealth(page):
-    """Apply stealth measures to page to avoid bot detection"""
-    if HAS_STEALTH:
-        try:
-            await stealth_async(page)
-            return True
-        except Exception as e:
-            print(f"应用stealth失败: {e}")
+    """Apply stealth measures to page to avoid bot detection (playwright-stealth 2.x)."""
+    if not HAS_STEALTH or _StealthCls is None:
+        return False
+    try:
+        stealth = _StealthCls(
+            navigator_languages_override=("zh-CN", "zh", "en"),
+            navigator_platform_override="MacIntel" if sys.platform == "darwin" else "Win32",
+            # 使用真实 Chrome UA，不强行改 userAgent/sec-ch-ua，避免与本机版本不一致
+            navigator_user_agent=False,
+            sec_ch_ua=False,
+        )
+        await stealth.apply_stealth_async(page)
+        return True
+    except Exception as e:
+        print(f"应用stealth失败: {e}")
     return False
 
 
@@ -304,6 +314,23 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     
     errors = []
     
+    # 可选：连接本机已启动的 Chrome（便于使用已登录态）
+    # 先启动: Google Chrome 增加参数 --remote-debugging-port=9222（勿与日常 Chrome 同时开同一配置）
+    # 再设置环境变量: export CRAWLER_CHROME_DEBUG_PORT=9222
+    debug_port = os.environ.get("CRAWLER_CHROME_DEBUG_PORT", "").strip()
+    if debug_port.isdigit():
+        try:
+            browser = await playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{debug_port}", timeout=15000
+            )
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            page = context.pages[0] if context.pages else await context.new_page()
+            await apply_stealth(page)
+            print(f"✓ 已通过 CDP 连接本机 Chrome（端口 {debug_port}），使用其中登录状态与环境")
+            return context, page, browser
+        except Exception as e:
+            errors.append(f"CDP:{e}")
+    
     # Common launch arguments - 反检测但不破坏安全性
     # 注意: 不要使用 --disable-web-security, --ignore-certificate-errors, 
     # --allow-running-insecure-content，否则浏览器会显示"不安全"
@@ -346,6 +373,7 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
                     args=common_args,
                 )
                 page = context.pages[0] if context.pages else await context.new_page()
+                await apply_stealth(page)
                 print(f"使用 {browser_type}")
                 return context, page, None
             except Exception as e:
@@ -357,17 +385,8 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
     else:
         browsers_to_try = [("Chrome", "chrome"), ("Edge", "msedge")]
     
-    # 与系统一致的用户代理（Mac 上用 Mac UA，减少指纹异常）
-    if sys.platform == 'darwin':
-        user_agent = (
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        )
-    else:
-        user_agent = (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        )
+    # 不覆盖 user_agent：使用当前 Chrome/Edge 真实 UA，避免与 channel 版本不一致被风控
+    # （此前固定 Chrome/131 字符串常与本机浏览器主版本不一致，易被识别）
     
     # Try browsers in order
     for name, channel in browsers_to_try:
@@ -389,7 +408,6 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
                 viewport={'width': 1920, 'height': 1080},
                 locale='zh-CN',
                 args=common_args,
-                user_agent=user_agent,
                 java_script_enabled=True,
                 extra_http_headers={
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -409,15 +427,10 @@ async def create_browser_context(playwright, headless: bool = False, browser_typ
             headless=headless,
             args=common_args
         )
-        fallback_ua = (
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-            if sys.platform == 'darwin'
-            else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-        )
         context = await browser.new_context(
             viewport={'width': 1920, 'height': 1080},
-            user_agent=fallback_ua,
             locale='zh-CN',
+            extra_http_headers={'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'},
         )
         page = await context.new_page()
         # 应用stealth反检测

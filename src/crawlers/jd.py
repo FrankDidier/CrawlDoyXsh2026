@@ -120,7 +120,7 @@ class JDCrawler(BaseCrawler):
         self._update_progress(status=CrawlStatus.RUNNING, message=f"开始搜索: {keyword}")
         
         try:
-            await self._init_browser(headless=False, browser_type=browser_type)
+            await self._init_browser(headless=headless, browser_type=browser_type)
             
             import random
             

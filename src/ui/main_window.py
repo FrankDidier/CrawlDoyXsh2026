@@ -245,7 +245,9 @@ class MainWindow(QMainWindow):
         
         # Headless checkbox
         self.headless_check = QCheckBox("后台运行")
-        self.headless_check.setToolTip("勾选后浏览器在后台运行，不显示窗口")
+        self.headless_check.setToolTip(
+            "勾选后无头运行。淘宝/京东/抖音/快手易被风控拦截，建议不勾选；需要验证码时务必关闭此项。"
+        )
         search_layout.addWidget(self.headless_check, 2, 5)
         
         # Row 3: Buttons
